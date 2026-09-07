@@ -275,23 +275,21 @@ class PPOPolicy(PPOBase):
         spec = Unbounded((num_envs, 128), device=self.device)
         return TensorDictPrimer({"adapt_hx": spec}, reset_key="done", expand_specs=False)
 
-    def get_rollout_policy(self, mode: str="train"):
+    def get_rollout_policy(self, mode: str = "train", critic: bool = False):
         modules = [self.vecnorm]
-        
         if self.cfg.phase == "train":
-            modules.append(self.encoder_priv)
-            modules.append(self.actor_teacher)
-            # modules.append(self.adapt_module) # not used in train phase
-        elif self.cfg.phase == "adapt": # this phase can be skipped
-            modules.append(self.adapt_module)
-            modules.append(self.actor_student)
+            modules += [self.encoder_priv, self.actor_teacher]
+        elif self.cfg.phase == "adapt":  # this phase can be skipped
+            modules += [self.adapt_module, self.actor_student]
         elif self.cfg.phase == "finetune":
-            # modules.append(self.adapt_module) # we use its EMA for better stability
-            modules.append(self.adapt_ema)
-            modules.append(self.actor_student)
-        
-        policy = Seq(*modules)
-        return policy
+            modules += [self.adapt_ema, self.actor_student]  # EMA copy for stability
+        if critic:
+            modules.append(self.critic)
+        return Seq(*modules)
+
+    def compute_value(self, tensordict: TensorDict):
+        self.vecnorm(tensordict)
+        return self.critic(tensordict)
 
     @VecNorm.freeze()
     def train_op(self, tensordict: TensorDict):
@@ -366,17 +364,14 @@ class PPOPolicy(PPOBase):
     # @torch.compile
     def _update(self, tensordict: TensorDict):
         bsize = tensordict.shape[0]
-        symmetry = tensordict.empty()
-        symmetry["_obs_normed"] = self.obs_transform(tensordict["_obs_normed"])
-        symmetry["_priv_normed"] = self.priv_transform(tensordict["_priv_normed"])
-        symmetry["_ext_normed"] = self.ext_transform(tensordict["_ext_normed"])
-        symmetry[ACTION_KEY] = self.act_transform(tensordict[ACTION_KEY])
-        symmetry["action_log_prob"] = tensordict["action_log_prob"]
-        symmetry["is_init"] = tensordict["is_init"]
-        symmetry["step_count"] = tensordict["step_count"]
-        symmetry["ret"] = tensordict["ret"]
-        symmetry["adv"] = tensordict["adv"]
         if self.cfg.symaug:
+            symmetry = tensordict.empty()
+            symmetry["_obs_normed"] = self.obs_transform(tensordict["_obs_normed"])
+            symmetry["_priv_normed"] = self.priv_transform(tensordict["_priv_normed"])
+            symmetry["_ext_normed"] = self.ext_transform(tensordict["_ext_normed"])
+            symmetry[ACTION_KEY] = self.act_transform(tensordict[ACTION_KEY])
+            for k in ("action_log_prob", "is_init", "step_count", "ret", "adv"):
+                symmetry[k] = tensordict[k]
             tensordict = torch.cat([tensordict, symmetry], dim=0)
         
         valid = (tensordict["step_count"] > 1)
@@ -421,10 +416,13 @@ class PPOPolicy(PPOBase):
         with torch.no_grad():
             explained_var = 1 - value_loss / b_returns[~tensordict["is_init"]].var()
             clipfrac = ((ratio - 1).abs() > self.clip_param).float().mean()
-            symmetry_loss = F.mse_loss(
-                tensordict["loc"][bsize:], 
-                self.act_transform(tensordict["loc"][:bsize])
-            )
+            if self.cfg.symaug:
+                symmetry_loss = F.mse_loss(
+                    tensordict["loc"][bsize:],
+                    self.act_transform(tensordict["loc"][:bsize])
+                )
+            else:
+                symmetry_loss = torch.zeros((), device=self.device)
         info = {
             "actor/policy_loss": policy_loss.detach(),
             "actor/entropy": entropy.detach(),
@@ -445,11 +443,10 @@ class PPOPolicy(PPOBase):
     
     def load_state_dict(self, state_dict, strict=True):
         failed_keys = super().load_state_dict(state_dict, strict)
-        if state_dict.get("last_phase", "train") == "train":
-            # only copy to initialize the actor once
-            hard_copy_(self.actor, self.actor_adapt)
+        if state_dict.get("last_phase", "train") == "train" and self.cfg.phase != "train":
+            # Starting adapt/finetune from a teacher checkpoint: initialise the student from the teacher once.
+            hard_copy_(self.actor_teacher, self.actor_student)
         return failed_keys
-
 
 def normalize(x: torch.Tensor, subtract_mean: bool=False):
     if subtract_mean:

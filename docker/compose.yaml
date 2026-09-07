@@ -1,0 +1,58 @@
+services:
+  aa:                                  # headless training / evaluation
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    image: active-adaptation-isaac:5.1.0
+    runtime: nvidia
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      - NVIDIA_DRIVER_CAPABILITIES=all      # needed for Vulkan/RTX inside the container
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+      - OMNI_KIT_ALLOW_ROOT=1
+      - WANDB_MODE=${WANDB_MODE:-offline}   # offline by default; wandb.init honours this variable
+      - WANDB_API_KEY=${WANDB_API_KEY:-}
+    env_file:
+      - path: .env
+        required: false
+    shm_size: "8gb"
+    network_mode: host
+    stdin_open: true
+    tty: true
+    volumes:
+      - ..:/workspace/active_adaptation          # code, outputs/, .cache/
+      - isaac-cache-kit:/isaac-sim/kit/cache      # shader/extension caches: make 2nd start fast
+      - isaac-cache-ov:/root/.cache/ov
+      - isaac-cache-pip:/root/.cache/pip
+      - isaac-cache-gl:/root/.cache/nvidia/GLCache
+      - isaac-cache-compute:/root/.nv/ComputeCache
+      - isaac-logs:/root/.nvidia-omniverse/logs
+      - isaac-data:/root/.local/share/ov/data
+
+  aa-gui:                              # optional: play.py with a window (run `xhost +local:root` on the host first)
+    extends: aa
+    profiles: [gui]
+    environment:
+      - DISPLAY=${DISPLAY}
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      - ACCEPT_EULA=Y
+      - PRIVACY_CONSENT=Y
+      - OMNI_KIT_ALLOW_ROOT=1
+    volumes:
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+volumes:
+  isaac-cache-kit: {}
+  isaac-cache-ov: {}
+  isaac-cache-pip: {}
+  isaac-cache-gl: {}
+  isaac-cache-compute: {}
+  isaac-logs: {}
+  isaac-data: {}

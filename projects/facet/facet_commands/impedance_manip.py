@@ -84,17 +84,9 @@ def make_point_marker(name: str, color: Tuple[float, float, float]):
     return marker
 
 def make_frame_marker(name: str):
-    marker = VisualizationMarkers(
-        VisualizationMarkersCfg(
-            prim_path=f"/Visuals/Command/{name}",
-            markers={
-                name: sim_utils.UsdFileCfg(
-                    usd_path=f"/home/btx0424/lab50/frame_prim.usd",
-                    scale=(0.1, 0.1, 0.1),
-                ),
-            }
-        )
-    )
+    cfg = FRAME_MARKER_CFG.replace(prim_path=f"/Visuals/Command/{name}")
+    cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+    marker = VisualizationMarkers(cfg)
     marker.set_visibility(True)
     return marker
 
@@ -345,6 +337,21 @@ class ImpedanceCommandManager(Command):
         )
         return SymmetryTransform.cat([linear, angular]).repeat(2)
 
+    def symmetry_transform_hidden(self):
+        """Mirror map for `command_hidden`; must match the concatenation order in that property."""
+        n = len(self.ref_steps)
+        flip_y = SymmetryTransform(perm=torch.arange(3), signs=torch.tensor([1., -1., 1.]))          # xyz vectors
+        flip_roll_yaw = SymmetryTransform(perm=torch.arange(3), signs=torch.tensor([-1., 1., -1.]))  # rpy / angular vel
+        parts = [
+            flip_y.repeat(n),         # base position error, n steps
+            flip_y.repeat(n),         # base linear velocity, n steps
+            flip_roll_yaw.repeat(n),  # base rpy error, n steps
+            flip_roll_yaw.repeat(n),  # base angular velocity, n steps
+        ]
+        if self.has_eef:
+            parts += [flip_y.repeat(n), flip_y.repeat(n)]   # eef position error, eef velocity
+        return SymmetryTransform.cat(parts)
+
 
     @property
     def command_hidden(self):
@@ -379,7 +386,9 @@ class ImpedanceCommandManager(Command):
             raise ValueError(f"Invalid input dimension: {x.ndim}")
         return quat_rotate(quat, x)
 
-    def step(self, substep: int):
+    def pre_step(self, substep: int):
+        # NOTE: must be `pre_step`. The env only wires `pre_step` (env_base.py:214);
+        # a method named `step` is never called, so the impulse forces would never reach the robot.
         # self.asset._external_force_b[:, self.eef_body_id] += quat_rotate_inverse(
         #     self.asset.data.body_quat_w[:, self.eef_body_id],
         #     self.get_eef_force(self.asset.data.body_pos_w[:, self.eef_body_id], self.asset.data.body_lin_vel_w[:, self.eef_body_id])

@@ -218,6 +218,37 @@ python eval.py task=Go2/Go2Flat algo=ppo eval_render=true
 python eval_run.py --run_path ${wandb_run_path} --play # eval/visualize remote runs
 ```
 
+### FACET (Go2) in Docker
+
+The FACET paper's quadruped experiment (`projects/facet/`, task `facet/Go2Force`) can be trained without
+installing Isaac Sim on the host. `docker/` builds an image from `nvcr.io/nvidia/isaac-sim:5.1.0` with
+Isaac Lab v2.3.2 and this repository; the repo is bind-mounted, so code edits and `outputs/` persist.
+See `PLAN.md` for the step-by-step guide and troubleshooting.
+
+```bash
+cd docker
+docker compose build                                   # ~15 GB download, 20-40 min
+docker compose run --rm aa aa-list-tasks | grep facet  # expect facet/Go2Force
+
+# smoke test: 64 robots, no wandb
+docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_train \
+    task.num_envs=64 total_frames=200_000 wandb.mode=disabled
+# teacher (privileged) policy; wandb runs are stored offline under outputs/
+docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_train \
+    task.num_envs=1024 wandb.mode=offline
+# student (deployable) policy, initialised from the teacher checkpoint
+docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_finetune \
+    task.num_envs=1024 wandb.mode=offline checkpoint_path=outputs/<run>/checkpoint_final.pt
+# render a video headless, or open a window with the `gui` profile (run `xhost +local:root` first)
+docker compose run --rm aa python scripts/eval.py task=facet/Go2Force algo=ppo_facet_finetune \
+    task.num_envs=16 checkpoint_path=<ckpt> eval_render=true wandb.mode=disabled
+docker compose --profile gui run --rm aa-gui python scripts/play.py task=facet/Go2Force \
+    algo=ppo_facet_finetune task.num_envs=16 checkpoint_path=<ckpt>
+```
+
+An 8 GB GPU fits about 1024-2048 environments (the paper used 4096); override `task.num_envs` on the
+command line rather than editing the task file.
+
 ### VSCode/Cursor Python Debugging
 
 Create and modify `.vscode/launch.json` to add debug configurations. For example:
@@ -232,9 +263,8 @@ Create and modify `.vscode/launch.json` to add debug configurations. For example
       "justMyCode": false,
       "env": {"CUDA_VISIBLE_DEVICES": "0"},
       "args": [
-          "task=Go2/Go2Force",
-          "algo=ppo_dic_train",
-          "algo.symaug=True",
+          "task=facet/Go2Force",
+          "algo=ppo_facet_train",
           "wandb.mode=disabled",
           "task.num_envs=16"
       ]

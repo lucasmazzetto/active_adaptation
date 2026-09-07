@@ -76,27 +76,19 @@ class command(Observation):
         return self.command_manager.symmetry_transform()
 
 
-# class command_hidden(Observation):
-#     def __init__(self, env):
-#         super().__init__(env)
-#         self.command_manager = self.env.command_manager
-    
-#     @override
-#     def compute(self):
-#         return self.command_manager.command_hidden
-    
-#     @override
-#     def symmetry_transform(self):
-#         transform = sym_utils.SymmetryTransform(
-#             perm=torch.arange(3), 
-#             signs=[1, -1, 1]
-#         )
-#         return sym_utils.SymmetryTransform.cat([
-#             transform.repeat(3),
-#             transform.repeat(3),
-#             sym_utils.SymmetryTransform(torch.arange(3), torch.tensor([-1, -1, -1])),
-#             sym_utils.SymmetryTransform(torch.arange(3), torch.tensor([-1, -1, -1])),
-#         ])
+class command_hidden(Observation):
+    """Privileged view of the command manager (e.g. future reference states)."""
+    def __init__(self, env):
+        super().__init__(env)
+        self.command_manager = self.env.command_manager
+
+    @override
+    def compute(self):
+        return self.command_manager.command_hidden
+
+    @override
+    def symmetry_transform(self):
+        return self.command_manager.symmetry_transform_hidden()
 
 
 class root_angvel_b(Observation):

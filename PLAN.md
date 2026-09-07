@@ -658,6 +658,19 @@ and, further down inside `with torch.no_grad():`, replace the `symmetry_loss` li
 ```
 `hard_copy_` is already imported through `from .common import *`.
 
+### Task 7.6 — (added during implementation) Rename the command manager's force hook
+
+**Not in the original plan; found while implementing.** `ImpedanceCommandManager` applied its
+impulse forces from a method named `step(self, substep)`. The environment never calls a method
+with that name: `env_base.py:214` wires `self.command_manager.pre_step`, and `MDPComponent`
+defines the hooks `reset / update / pre_step / post_step / startup / debug_draw` only. The
+external forces therefore never reached the robot, so the trained policy would never experience
+a push. That contradicts the whole method and the Definition of Done in Topic 12.
+
+Fix applied in `projects/facet/facet_commands/impedance_manip.py`: rename `step` to `pre_step`
+and leave a comment saying why. The old `Impedance` class in `impedance.py` has the same defect
+but is unused (Topic 11).
+
 ### Task 7.5 — Check the file still parses
 ```bash
 python3 -c "import ast; ast.parse(open('active_adaptation/learning/ppo/ppo_facet.py').read()); print('ok')"

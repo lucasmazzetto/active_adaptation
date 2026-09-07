@@ -194,3 +194,6 @@ scripts/rollout
 checkpoint*.pt
 test/
 *.csv
+
+# local docker secrets
+docker/.env
