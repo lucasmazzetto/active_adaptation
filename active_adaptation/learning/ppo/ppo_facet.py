@@ -448,6 +448,7 @@ class PPOPolicy(PPOBase):
             hard_copy_(self.actor_teacher, self.actor_student)
         return failed_keys
 
+
 def normalize(x: torch.Tensor, subtract_mean: bool=False):
     if subtract_mean:
         return (x - x.mean()) / x.std().clamp(1e-7)

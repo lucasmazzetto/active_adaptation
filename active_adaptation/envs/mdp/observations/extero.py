@@ -8,6 +8,7 @@ from jaxtyping import Float
 from .base import Observation
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse, yaw_quat, quat_from_euler_xyz
 from active_adaptation.utils.symmetry import SymmetryTransform, cartesian_space_symmetry
+from active_adaptation.envs.mdp.utils.wrench import get_external_force_b, get_external_torque_b
 
 if TYPE_CHECKING:
     from isaaclab.assets import Articulation
@@ -82,7 +83,7 @@ class external_forces(Observation):
         self.denom = default_mass_total if divide_by_mass else torch.tensor(scale, device=self.device)
 
     def update(self):
-        forces_b = self.asset._external_force_b[:, self.body_ids]
+        forces_b = get_external_force_b(self.asset)[:, self.body_ids]
         forces_b /= self.denom
         self.forces_b = forces_b
 
@@ -105,7 +106,7 @@ class external_torques(Observation):
         self.denom = default_inertia if divide_by_mass else torch.tensor(scale, device=self.device)
     
     def update(self):
-        torques_b = self.asset._external_torque_b[:, self.body_ids]
+        torques_b = get_external_torque_b(self.asset)[:, self.body_ids]
         torques_b = torques_b / self.denom
         self.torques_b = torques_b
     

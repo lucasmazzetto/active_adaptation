@@ -17,6 +17,7 @@ from active_adaptation.utils.math import (
 from tensordict import TensorClass
 from pathlib import Path
 from active_adaptation.envs.mdp.utils.forces import ConstantForce, SpringForce, ImpulseForce
+from active_adaptation.envs.mdp.utils.wrench import add_external_wrench
 from active_adaptation.utils.symmetry import SymmetryTransform
 
 
@@ -394,11 +395,8 @@ class ImpedanceCommandManager(Command):
         #     self.get_eef_force(self.asset.data.body_pos_w[:, self.eef_body_id], self.asset.data.body_lin_vel_w[:, self.eef_body_id])
         # )
         force_base_w = self.force_impulse.get_force(None, None)
-        self.asset._external_force_b[:, 0] += quat_rotate_inverse(
-            self.asset.data.root_link_quat_w,
-            force_base_w
-        )
-        self.asset.has_external_wrench = True
+        force_base_b = quat_rotate_inverse(self.asset.data.root_link_quat_w, force_base_w)
+        add_external_wrench(self.asset, forces=force_base_b.unsqueeze(1), body_ids=[0])
 
     def reset(self, env_ids: torch.Tensor):
         root_link_pos = self.asset.data.root_link_pos_w[env_ids]

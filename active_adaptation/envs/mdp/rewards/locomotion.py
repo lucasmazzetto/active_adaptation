@@ -1,3 +1,4 @@
+from active_adaptation.envs.mdp.utils.wrench import get_external_force_b
 import torch
 from typing import TYPE_CHECKING, Optional, List, Union
 from typing_extensions import override
@@ -434,7 +435,7 @@ class oscillator(Reward):
 
     def post_step(self, substep):
         grf = self.contact_sensor.data.net_forces_w[:, self.feet_ids].norm(dim=-1)
-        grf += self.asset._external_force_b[:, self.art_feet_ids].norm(dim=-1)
+        grf += get_external_force_b(self.asset)[:, self.art_feet_ids].norm(dim=-1)
         self.grf_substep[:, substep] = grf
 
     def update(self):

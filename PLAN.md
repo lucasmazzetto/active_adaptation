@@ -585,6 +585,59 @@ def make_frame_marker(name: str):
 
 ---
 
+## 6b. (added during implementation) External wrench API changed in Isaac Lab 2.3
+
+**Not in the original plan; found while implementing.** Isaac Lab up to 2.2 exposed the raw
+buffers `Articulation._external_force_b` / `_external_torque_b` plus a `has_external_wrench`
+flag. **Isaac Lab 2.3.2 removed all three** and replaced them with `WrenchComposer`, reached
+as `asset.permanent_wrench_composer`. Verified against the installed tree and against
+`isaaclab/utils/wrench_composer.py` at tag v2.3.2 (`_external_force_b` appears zero times in
+`articulation.py` and `rigid_object.py`).
+
+Three places in this repository still used the old buffers and would raise `AttributeError`
+on the first physics substep:
+
+1. `ImpedanceCommandManager.pre_step` — applying the FACET impulse forces.
+2. `external_forces` / `external_torques` observations (`observations/extero.py`) — the whole
+   `ext` group that `ppo_facet` requires.
+3. A gait reward in `rewards/locomotion.py` that adds external foot forces to ground reaction force.
+
+The MuJoCo backend in this repo (`envs/backends/mujoco/mujoco.py`) still uses the old buffers,
+so the code has to support both.
+
+### Task 6b.1 — Add a compatibility layer
+New file `active_adaptation/envs/mdp/utils/wrench.py` with three functions:
+
+* `add_external_wrench(asset, forces, torques, body_ids, positions, is_global)` — uses
+  `permanent_wrench_composer.add_forces_and_torques(...)` when present, else `+=` on the old
+  buffers and sets `has_external_wrench`. Accumulates, matching the `+=` the old code used.
+* `get_external_force_b(asset)` / `get_external_torque_b(asset)` — return
+  `composed_force_as_torch` / `composed_torque_as_torch` when present, else the old buffers.
+  Both are `(num_envs, num_bodies, 3)` in the body link frame, so call sites are unchanged
+  apart from the accessor.
+
+Why the *permanent* composer: `write_data_to_sim` folds permanent into instantaneous and then
+resets only the instantaneous one, while the environment clears both at the start of every
+substep via `scene.zero_external_wrenches()`. So a permanent wrench written in `pre_step`
+survives the step and is still readable by the observation `update()` that runs after the
+substep loop. That preserves the original ordering.
+
+### Task 6b.2 — Use it at the three call sites
+Replace the direct buffer access with the helpers. In the command manager the world-frame
+impulse is still rotated into the body frame explicitly (`quat_rotate_inverse` on
+`root_link_quat_w`) and applied to body 0 with `body_ids=[0]`, so behaviour matches the
+original code rather than relying on the composer's `is_global` path.
+
+### Task 6b.3 — Check
+```bash
+grep -rn "_external_force_b\|_external_torque_b\|has_external_wrench" active_adaptation projects --include=*.py
+```
+The only remaining hits should be: `utils/wrench.py` itself, the MuJoCo backend, the Isaac
+adapter's `zero_external_wrenches` (already `hasattr`-guarded), the legacy fallback inside
+`randomizations/common.py::_set_external_wrench`, and the unused `impedance.py`.
+
+---
+
 ## 7. Bring `ppo_facet.py` up to the current `PPOBase` contract
 
 File: `active_adaptation/learning/ppo/ppo_facet.py`. Reference for the contract:
@@ -791,6 +844,10 @@ docker compose run --rm aa python scripts/play.py task=facet/Go2Force algo=ppo_f
 | `CUDA out of memory` | too many robots for 8 GB | lower `task.num_envs`; Task 9.3 |
 | Very slow first start | shader compilation | wait; caches are persisted in named volumes |
 | `ModuleNotFoundError: active_adaptation` | entrypoint skipped (e.g. `docker exec` into a container) | `source /opt/isaac_env.sh && pip install --no-deps -e /workspace/active_adaptation` |
+| Build fails: `apt-get ... Permission denied` | base image runs as uid 1234 | `USER root` in the Dockerfile (already applied) |
+| Build fails: `Invalid requirement: '\x1b[3g'` | `isaaclab.sh` writes terminal escape codes into the captured constraints file | generate constraints by sourcing `isaac_env.sh` and filter with `grep -oE` (already applied) |
+| `import isaaclab` fails after build | the `isaaclab` core install failed silently because `flatdict`'s `setup.py` needs `pkg_resources` | pre-install `flatdict==4.0.1 --no-build-isolation` before `isaaclab.sh --install` (already applied); the Dockerfile now asserts `import isaaclab` |
+| `AttributeError: ... _external_force_b` | Isaac Lab 2.3 removed the buffer | Topic 6b |
 | GUI: `cannot open display` | X11 not shared | `xhost +local:root`, `--profile gui`, `echo $DISPLAY` non-empty |
 
 ---
