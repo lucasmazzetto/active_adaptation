@@ -818,16 +818,26 @@ named cache volumes make later starts much faster.
 docker compose run --rm aa python scripts/train_ppo.py \
     task=facet/Go2Force algo=ppo_facet_train task.num_envs=1024 wandb.mode=offline
 ```
-Watch VRAM on the host with `watch -n 5 nvidia-smi`. If usage stays under ~7 GB, restart
-with `task.num_envs=2048`. If you get `CUDA out of memory`, go back to 1024 and add
+**Measured on this machine** (RTX 3070 Ti Laptop, 8 GB), so no guesswork is needed:
+
+| `task.num_envs` | peak VRAM | per iteration | frames/iteration | 150 M frames |
+|---|---|---|---|---|
+| 2048 | 4.7 GB | 2.4 s | 65 536 | ~1.5 h |
+| 4096 | 6.7 GB | 3.1 s | 131 072 | ~1 h |
+
+4096 (the paper's setting) fits with ~1.4 GB to spare and is also the fastest, so use it:
+
+```bash
+docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_train \
+    task.num_envs=4096 total_frames=150_000_000 wandb.mode=offline
+```
+If another GPU-using application is open, drop to 2048. On `CUDA out of memory`, add
 `task.sim.gpu_max_rigid_patch_count=81920 task.sim.gpu_found_lost_aggregate_pairs_capacity=16777216`.
-`total_frames` defaults to 150 M (see `cfg/train.yaml`); with 2048 robots that is roughly
-one day on this laptop. You can stop earlier: checkpoints are written every
-`checkpoint_interval=4` iterations.
+You can stop early: checkpoints are written every `checkpoint_interval=4` iterations.
 
 Find results:
 ```bash
-find ../outputs -name "checkpoint_*.pt" | tail -3
+find ../outputs -name 'checkpoint_*.pt' | tail -3   # under <run>/wandb/offline-run-*/files/
 find ../outputs -name "cfg.yaml" | tail -1
 ```
 Offline wandb runs can be uploaded later with `wandb sync <run dir>` (needs an API key).
