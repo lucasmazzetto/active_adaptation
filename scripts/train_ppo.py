@@ -54,7 +54,9 @@ def main(cfg: DictConfig):
         default_run_name = (
             f"{cfg.exp_name}-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')}"
         )
-        run_idx = run.name.split("-")[-1]
+        # wandb only auto-generates a run name when syncing online; offline and disabled
+        # runs leave `run.name` as None, so fall back to the run id for the suffix.
+        run_idx = (run.name or run.id or "local").split("-")[-1]
         run.name = f"{run_idx}-{default_run_name}"
         setproctitle(run.name)
 

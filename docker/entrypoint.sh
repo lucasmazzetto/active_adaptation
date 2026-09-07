@@ -4,14 +4,16 @@ set -euo pipefail
 source /opt/isaac_env.sh
 cd /workspace/active_adaptation
 
-# 1. Register this repo (editable) with Isaac Sim's Python. --no-deps: deps were installed at build time.
+# The image already installs this repo editable at the same path the bind mount uses.
+# This is only a fallback (e.g. if the image was built from a different context).
 if ! python -m pip show active_adaptation >/dev/null 2>&1; then
+    echo "[entrypoint] active_adaptation not installed in the image; installing now..."
     python -m pip install --no-deps -e /workspace/active_adaptation
 fi
 
-# 2. Discover projects and enable only `facet`.
-#    The Hydra search-path plugin and the project importer both ignore disabled projects,
-#    so without this step neither the task YAML nor ImpedanceCommandManager is found.
+# Discover projects and enable only `facet`. The Hydra search-path plugin and the
+# project importer both ignore disabled projects, so without this step neither the
+# task YAML nor ImpedanceCommandManager is found.
 aa-discover-projects >/dev/null
 python - <<'PY'
 import json, pathlib
@@ -20,7 +22,7 @@ d = json.loads(p.read_text())
 for name, info in d.get("environment", {}).items():
     info["enabled"] = (name == "facet")
 p.write_text(json.dumps(d, indent=2))
-print("projects.json:", {k: v["enabled"] for k, v in d["environment"].items()})
+print("[entrypoint] projects:", {k: v["enabled"] for k, v in d["environment"].items()})
 PY
 
 exec "$@"

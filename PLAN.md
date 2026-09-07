@@ -638,6 +638,46 @@ adapter's `zero_external_wrenches` (already `hasattr`-guarded), the legacy fallb
 
 ---
 
+## 6c. (added during implementation) Four more blockers found by actually running it
+
+Each of these stopped a run outright and is fixed on this branch.
+
+### Task 6c.1 — tensordict/torchrl must be recent
+The whole codebase reads `tensordict["action_log_prob"]`. That is only the default log-prob
+key once `composite_lp_aggregate` defaults to False. Measured in the container:
+
+| tensordict / torchrl | `composite_lp_aggregate()` | log-prob key |
+|---|---|---|
+| 0.7.0 / 0.7.0 | True | `sample_log_prob` -> every PPO update raises `KeyError` |
+| 0.8.3 / 0.8.1 | True | `sample_log_prob` |
+| 0.13.0 / 0.13.3 | False | `action_log_prob` (what the code wants) |
+
+The repo's `uv.lock` pins 0.7.0, but that lock is stale: it belongs to `venv/isaaclab`, which
+depends on a `projects/hdmi` package that does not exist in this tree. The README's
+`pip install -U tensordict torchrl` is what the code targets. The Dockerfile pins the verified
+`tensordict==0.13.0` / `torchrl==0.13.3` (reproducible, and new enough), with torch held at
+Isaac Sim's 2.7.0 by the constraints file.
+
+### Task 6c.2 — `ScopedTimer` crashed after training
+`active_adaptation/utils/profiling.py` keys timers by name as singletons and raised
+`ValueError: Timer simulation already has a parent rollout` if the same scope was entered
+under a different parent. That happens on every run: `simulation` nests under `rollout`
+while collecting, then runs bare during the post-training evaluation. Fix: record the parent
+on first use and never re-parent or raise. The link only shapes the printed summary, and
+timing accumulates on the singleton either way.
+
+### Task 6c.3 — offline wandb runs have no name
+`scripts/train_ppo.py` did `run.name.split("-")` , but wandb only auto-generates a name when
+syncing online; offline and disabled runs leave it `None`. Fix: fall back to `run.id`.
+This matters because the chosen default for this project is `wandb.mode=offline`.
+
+### Task 6c.4 — `cfg/eval.yaml` could not start
+It was the only entry config missing `backend` and `device`, so `scripts/eval.py` died in
+`active_adaptation.init()` with `Missing key backend`. It also had a stray YAML tag,
+`enable_cameras: ! ${..eval_render}`. Both fixed.
+
+---
+
 ## 7. Bring `ppo_facet.py` up to the current `PPOBase` contract
 
 File: `active_adaptation/learning/ppo/ppo_facet.py`. Reference for the contract:
@@ -848,6 +888,12 @@ docker compose run --rm aa python scripts/play.py task=facet/Go2Force algo=ppo_f
 | Build fails: `Invalid requirement: '\x1b[3g'` | `isaaclab.sh` writes terminal escape codes into the captured constraints file | generate constraints by sourcing `isaac_env.sh` and filter with `grep -oE` (already applied) |
 | `import isaaclab` fails after build | the `isaaclab` core install failed silently because `flatdict`'s `setup.py` needs `pkg_resources` | pre-install `flatdict==4.0.1 --no-build-isolation` before `isaaclab.sh --install` (already applied); the Dockerfile now asserts `import isaaclab` |
 | `AttributeError: ... _external_force_b` | Isaac Lab 2.3 removed the buffer | Topic 6b |
+| `ModuleNotFoundError: No module named 'toml'` on `import isaaclab` | `isaaclab/__init__.py` imports `toml`, which Isaac Sim does not bundle | `pip install toml` before the Isaac Lab install (already applied) |
+| `module 'warp.types' has no attribute 'array'`, Isaac extensions fail to start | pip pulled `warp-lang` 1.17 over Isaac Sim's bundled warp 1.8.2 | use the bundled `omni.warp.core` extension and uninstall the pip copy (already applied) |
+| `KeyError: 'action_log_prob'` in the PPO update | tensordict too old, so the log-prob key is `sample_log_prob` | tensordict/torchrl must be recent (Topic 6c) |
+| `ValueError: Timer simulation already has a parent rollout` after training | `ScopedTimer` singletons refused re-use across scopes | Topic 6c |
+| `AttributeError: 'NoneType' object has no attribute 'split'` at start-up | wandb leaves `run.name` unset offline | Topic 6c |
+| `ConfigAttributeError: Missing key backend` from `eval.py` | `cfg/eval.yaml` lacked `backend`/`device` | Topic 6c |
 | GUI: `cannot open display` | X11 not shared | `xhost +local:root`, `--profile gui`, `echo $DISPLAY` non-empty |
 
 ---
@@ -862,6 +908,27 @@ docker compose run --rm aa python scripts/play.py task=facet/Go2Force algo=ppo_f
   and the same YAML fixes as Topic 4.
 - The old `Impedance` command (`impedance.py`) is kept for reference only; its constructor
   defaults do not match the current `Command` base and it should not be selected from YAML.
+
+---
+
+## 11b. What was actually verified on this machine
+
+All of the following were run end to end in the container on the RTX 3070 Ti:
+
+| Check | Result |
+|---|---|
+| `docker compose build` | succeeds; image `active-adaptation-isaac:5.1.0`, 23.6 GB |
+| torch / CUDA in container | torch 2.7.0, `cuda_available True`, RTX 3070 Ti Laptop GPU |
+| warp | 1.8.2, resolved to Isaac Sim's bundled `omni.warp.core` |
+| `aa-list-tasks` | lists `facet/Go2Force` and `facet/B1Z1` |
+| Training, 64 envs, 97 iterations | completes, exit code 0, including post-training evaluation |
+| Checkpoints | `checkpoint_0.pt`, `checkpoint_final.pt`, `checkpoint_latest.pt` written under the run's `wandb/offline-run-*/files/` |
+| External wrench round-trip | applying 12.5 N to body 0 reads back 12.5 N through the composer |
+| FACET impulse actually applied | 150 N impulse measured on the base while stepping (this is what Task 7.6 fixes) |
+| `scripts/eval.py` on the final checkpoint | loads all 14 modules, rolls out, reports `eval/episode_len` |
+
+The 60k-frame smoke run is far too short to produce a competent gait; it only proves the
+pipeline. Real training is Task 9.3.
 
 ---
 

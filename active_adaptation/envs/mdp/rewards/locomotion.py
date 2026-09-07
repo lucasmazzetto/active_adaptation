@@ -1,10 +1,10 @@
-from active_adaptation.envs.mdp.utils.wrench import get_external_force_b
 import torch
 from typing import TYPE_CHECKING, Optional, List, Union
 from typing_extensions import override
 
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse, yaw_quat
 from .base import Reward
+from active_adaptation.envs.mdp.utils.wrench import get_external_force_b
 from active_adaptation.envs.mdp.commands.locomotion import Twist
 
 if TYPE_CHECKING:

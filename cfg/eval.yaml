@@ -2,9 +2,14 @@
 
 headless: true
 
+# `backend` and `device` are required by active_adaptation.init(); train.yaml, play.yaml
+# and rollout.yaml all define them and eval.yaml did not.
+backend: isaac
+device: cuda
+
 app:
   headless: ${..headless}
-  enable_cameras: ! ${..eval_render}
+  enable_cameras: ${..eval_render}
 
 sim: ${task.sim}
 # env: ${task.env}

@@ -1,0 +1,8 @@
+.git
+venv
+outputs
+outputs_play
+.cache
+**/__pycache__
+*.egg-info
+docker/.env

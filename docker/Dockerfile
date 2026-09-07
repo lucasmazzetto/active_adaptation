@@ -30,14 +30,16 @@ COPY docker/make_constraints.py /opt/make_constraints.py
 # Isaac Lab pulls in flatdict, an sdist whose setup.py imports pkg_resources. Pip's isolated
 # build env does not provide it, which makes the isaaclab core install fail *silently*
 # (isaaclab.sh keeps going). Install it up front against the interpreter's own setuptools.
-RUN python -m pip install --no-cache-dir -U wheel \
+# `toml` is imported by isaaclab/__init__.py and is not bundled with Isaac Sim
+# (the upstream Isaac Lab Dockerfile installs it for the same reason).
+RUN python -m pip install --no-cache-dir -U wheel toml \
     && python -m pip install --no-cache-dir --no-build-isolation "flatdict==4.0.1"
 
 # Isaac Lab, installed into Isaac Sim's own Python. "--install none" skips RL libraries we do not use.
 RUN git clone --depth 1 -b v2.3.2 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
     && ln -sf ${ISAACSIM_ROOT_PATH} ${ISAACLAB_PATH}/_isaac_sim \
     && ${ISAACLAB_PATH}/isaaclab.sh --install none \
-    && python -c "import isaaclab; print('isaaclab import OK:', isaaclab.__file__)"
+    && bash -c 'source /opt/isaac_env.sh && python -c "import isaaclab; print(\"isaaclab import OK:\", isaaclab.__file__)"'
 
 # Freeze the versions Isaac Sim ships (torch, numpy, warp) so later pip installs cannot change them.
 # torch et al. are only importable once setup_python_env.sh has been sourced, and isaaclab.sh
@@ -48,10 +50,29 @@ RUN bash -c 'source /opt/isaac_env.sh && python /opt/make_constraints.py' \
     && test -s /opt/constraints.txt
 
 # Dependencies of this repo (mirrors pyproject.toml; the repo itself is mounted at run time).
+# tensordict/torchrl must be recent: this codebase reads `action_log_prob`, which is only the
+# default log-prob key once `composite_lp_aggregate` defaults to False (tensordict >= ~0.9).
+# On 0.7/0.8 the key is `sample_log_prob` and every PPO update raises KeyError. The repo's
+# uv.lock pins 0.7.0 but is stale (it references a projects/hdmi that is not in this tree);
+# the README's `pip install -U tensordict torchrl` is what the code actually targets.
 RUN python -m pip install --no-cache-dir -c /opt/constraints.txt \
         setproctitle hydra-core omegaconf wandb einops termcolor pygame onnxruntime onnxscript \
-        jaxtyping "tensordict==0.7.0" "torchrl==0.7.0" imageio av moviepy mujoco linuxfd pdbpp \
+        jaxtyping "tensordict==0.13.0" "torchrl==0.13.3" imageio av moviepy mujoco linuxfd pdbpp \
         "simple-raycaster @ git+https://github.com/btx0424/simple-raycaster.git"
+
+# Isaac Lab depends on an unpinned `warp-lang`, so pip pulls the newest release, which is
+# incompatible with the warp that Isaac Sim's own extensions use. Remove the pip copy; the
+# bundled extension (put on PYTHONPATH by isaac_env.sh) is the one and only warp.
+RUN python -m pip uninstall -y warp-lang \
+    && bash -c 'source /opt/isaac_env.sh && python -c "import warp; assert warp.config.version.startswith(\"1.8\"), warp.config.version; assert hasattr(warp.types, \"array\"); print(\"warp\", warp.config.version, warp.__file__)"'
+
+# Install this repository into the image. At run time the bind mount replaces the
+# source at the same path, so the editable install keeps pointing at live code while
+# the console scripts (aa-list-tasks, ...) and metadata persist in the image.
+COPY . ${AA_PATH}
+RUN python -m pip install --no-cache-dir --no-deps -e ${AA_PATH} \
+    && bash -c 'source /opt/isaac_env.sh && python -c "import active_adaptation; print(\"active_adaptation import OK\")"' \
+    && which aa-list-tasks
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -238,7 +238,7 @@ docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=
     task.num_envs=1024 wandb.mode=offline
 # student (deployable) policy, initialised from the teacher checkpoint
 docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_finetune \
-    task.num_envs=1024 wandb.mode=offline checkpoint_path=outputs/<run>/checkpoint_final.pt
+    task.num_envs=1024 wandb.mode=offline checkpoint_path=outputs/<run>/wandb/offline-run-*/files/checkpoint_final.pt
 # render a video headless, or open a window with the `gui` profile (run `xhost +local:root` first)
 docker compose run --rm aa python scripts/eval.py task=facet/Go2Force algo=ppo_facet_finetune \
     task.num_envs=16 checkpoint_path=<ckpt> eval_render=true wandb.mode=disabled

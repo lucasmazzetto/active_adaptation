@@ -48,18 +48,20 @@ class ScopedTimer(_DecoratorContextManager):
         return self
 
     def __enter__(self):
-        # Update hierarchical parent/roots based on current stack at each use,
-        # so timers appear under the scopes where they are most recently used.
+        # Record the hierarchical parent from the current stack the first time this
+        # timer is entered, so the summary shows where each scope sits.
         if ScopedTimer._stack:
             parent = ScopedTimer._stack[-1]
         else:
             parent = "root"
 
-        # Re-parent if needed so the summary tree reflects current usage.
-        if self.parent is not parent:
-            if self.parent is not None:
-                raise ValueError(f"Timer {self.name} already has a parent {self.parent.name}")
-            # Attach to new parent or root list.
+        # Attach to the scope this timer is first seen in. Timers are singletons keyed by
+        # name, so the same scope legitimately appears under different parents over a run
+        # (e.g. "simulation" nests under "rollout" while collecting, then runs bare during
+        # the post-training evaluation). The parent link only shapes the printed summary,
+        # and timing accumulates on the singleton either way, so keep the first parent
+        # rather than re-parenting or raising.
+        if self.parent is None:
             self.parent = parent
             if parent == "root":
                 ScopedTimer._root_nodes.append(self)
