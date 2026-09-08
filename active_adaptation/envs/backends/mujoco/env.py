@@ -2,7 +2,8 @@ from typing import cast
 
 try:
     from isaaclab.utils import configclass
-except ModuleNotFoundError:
+except ImportError:  # isaaclab.utils needs pxr, so it raises ImportError (not
+                     # ModuleNotFoundError) when no Isaac Sim app is running.
     def configclass(cls):
         return cls
 

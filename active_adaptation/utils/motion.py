@@ -10,7 +10,8 @@ from scipy.spatial.transform import Rotation as sRot, Slerp
 from concurrent.futures import ThreadPoolExecutor
 try:
     from isaaclab.utils.string import resolve_matching_names
-except ModuleNotFoundError:
+except ImportError:  # isaaclab.utils needs pxr, so it raises ImportError (not
+                     # ModuleNotFoundError) when no Isaac Sim app is running.
     from mjlab.utils.lab_api.string import resolve_matching_names
 
 

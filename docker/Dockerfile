@@ -60,6 +60,11 @@ RUN python -m pip install --no-cache-dir -c /opt/constraints.txt \
         jaxtyping "tensordict==0.13.0" "torchrl==0.13.3" imageio av moviepy mujoco linuxfd pdbpp \
         "simple-raycaster @ git+https://github.com/btx0424/simple-raycaster.git"
 
+# mjlab powers the MuJoCo backend (`backend=mujoco`), which is the only way to get a viewport
+# on this machine: Isaac Sim 5.1's RTX renderer crashes against driver 595.x, headless or not.
+# Installed after the Isaac deps and before the warp cleanup so the bundled warp still wins.
+RUN python -m pip install --no-cache-dir -c /opt/constraints.txt "mjlab==1.2.0"
+
 # Isaac Lab depends on an unpinned `warp-lang`, so pip pulls the newest release, which is
 # incompatible with the warp that Isaac Sim's own extensions use. Remove the pip copy; the
 # bundled extension (put on PYTHONPATH by isaac_env.sh) is the one and only warp.
@@ -73,6 +78,16 @@ COPY . ${AA_PATH}
 RUN python -m pip install --no-cache-dir --no-deps -e ${AA_PATH} \
     && bash -c 'source /opt/isaac_env.sh && python -c "import active_adaptation; print(\"active_adaptation import OK\")"' \
     && which aa-list-tasks
+
+# Vulkan presentation for the GUI. This laptop drives its displays from the AMD integrated
+# GPU while Isaac renders on the NVIDIA card. The container only gets NVIDIA's Vulkan ICD, so
+# with no AMD driver present Vulkan can create no presentable surface at all and Isaac Sim's
+# RTX renderer crashes on start-up (librtx.scenedb, carbOnPluginStartup). Mesa supplies the
+# radeon ICD that owns the X surface; with it, vulkaninfo reports a working xlib/xcb surface.
+# Harmless for headless runs.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        mesa-vulkan-drivers libvulkan1 libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

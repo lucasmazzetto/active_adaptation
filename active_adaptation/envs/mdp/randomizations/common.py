@@ -8,7 +8,8 @@ from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 
 try:
     import isaaclab.utils.string as string_utils
-except ModuleNotFoundError:
+except ImportError:  # isaaclab.utils needs pxr, so it raises ImportError (not
+                     # ModuleNotFoundError) when no Isaac Sim app is running.
     from mjlab.utils.lab_api import string as string_utils
 
 

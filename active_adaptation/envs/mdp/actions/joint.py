@@ -7,7 +7,8 @@ from typing_extensions import override
 
 try:
     import isaaclab.utils.string as string_utils
-except ModuleNotFoundError:
+except ImportError:  # isaaclab.utils needs pxr, so it raises ImportError (not
+                     # ModuleNotFoundError) when no Isaac Sim app is running.
     from mjlab.utils.lab_api import string as string_utils
 
 from active_adaptation.assets import get_input_joint_indexing

@@ -76,11 +76,20 @@ class IsaacBackendEnv(_EnvBase):
             obj_cfg.prim_path = "{ENV_REGEX_NS}/" + obj.name
             setattr(scene_cfg, obj.name, obj_cfg)
 
+        physx_kwargs = dict(self.cfg.sim.get("physx", {}))
+        try:
+            # Isaac Lab >= 3.0: PhysX is a pluggable physics backend, configured via
+            # `SimulationCfg.physics` with a cfg class that lives in isaaclab_physx.
+            from isaaclab_physx.physics import PhysxCfg as _PhysxCfg
+            physics_kwargs = {"physics": _PhysxCfg(**physx_kwargs)}
+        except ImportError:
+            # Isaac Lab <= 2.3: PhysX settings live on `SimulationCfg.physx`.
+            physics_kwargs = {"physx": sim_utils.PhysxCfg(**physx_kwargs)}
         sim_cfg = sim_utils.SimulationCfg(
             dt=self.cfg.sim.isaac_physics_dt,
             render=sim_utils.RenderCfg(rendering_mode="balanced"),
-            physx=sim_utils.PhysxCfg(**self.cfg.sim.get("physx", {})),
             device=str(self.device),
+            **physics_kwargs,
         )
 
         sim = SimulationContext.instance() or SimulationContext(sim_cfg)

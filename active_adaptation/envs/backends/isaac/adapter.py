@@ -147,7 +147,8 @@ class IsaacSceneAdapter(SceneAdapter):
         Returns a VisualizationMarkers instance. Call .set_visibility(True) and
         .visualize(positions_tensor) to use it.
         """
-        from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg, ISAAC_NUCLEUS_DIR
+        from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+        from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
         import isaaclab.sim as sim_utils
         marker = VisualizationMarkers(
             VisualizationMarkersCfg(

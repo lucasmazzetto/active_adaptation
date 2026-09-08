@@ -12,7 +12,8 @@ from dataclasses import dataclass, replace
 
 try:
     from isaaclab.utils import string as string_utils
-except ModuleNotFoundError:
+except ImportError:  # isaaclab.utils needs pxr, so it raises ImportError (not
+                     # ModuleNotFoundError) when no Isaac Sim app is running.
     from mjlab.utils.lab_api import string as string_utils
 from scipy.spatial.transform import Rotation as sRot
 

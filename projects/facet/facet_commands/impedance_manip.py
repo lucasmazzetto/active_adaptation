@@ -536,6 +536,8 @@ class ImpedanceCommandManager(Command):
             color=(0.0, 1.0, 0.0, 1.0),
             size=5.0,
         )
+        if not getattr(self, "ref_pos_marker", None):
+            return  # markers are only created on the isaac backend with a GUI
         self.ref_pos_marker.visualize(
             translations=self.pos_base.pos_w[:, self.ref_steps].reshape(-1, 3),
             orientations=quat_from_euler_xyz(self.rot_base.pos_w[:, self.ref_steps].reshape(-1, 3)),
