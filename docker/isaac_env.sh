@@ -16,11 +16,9 @@ export RESOURCE_NAME=IsaacSim
 export LD_PRELOAD=/isaac-sim/kit/libcarb.so   # WAR for missing libcarb.so, as in python.sh
 export PATH=/isaac-sim/kit/python/bin:${PATH}
 
-# Isaac Sim ships warp as the Kit extension omni.warp.core (1.8.2 for Isaac Sim 5.1),
+# Isaac Sim ships warp as the Kit extension omni.warp.core (1.13.0 for Isaac Sim 6.0),
 # and its own extensions are built against exactly that version. Put it ahead of
-# site-packages: a newer pip `warp-lang` makes isaacsim.core fail to start with
-# "module 'warp.types' has no attribute 'array'". PyPI has no 1.8.2, so we use the
-# bundled copy rather than pinning.
+# site-packages so a pip-installed `warp-lang` of another version can never shadow it.
 _aa_warp_core=$(ls -d /isaac-sim/extscache/omni.warp.core-*/ 2>/dev/null | head -1)
 if [ -n "${_aa_warp_core}" ]; then
     export PYTHONPATH="${_aa_warp_core%/}:${PYTHONPATH}"

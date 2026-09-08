@@ -78,9 +78,10 @@ class InitialStateCfg:
         Returns:
             ArticulationCfg.InitialStateCfg: Isaac Sim compatible initial state configuration.
         """
+        w, x, y, z = self.rot
         return ArticulationCfg.InitialStateCfg(
             pos=self.pos,
-            rot=self.rot,
+            rot=(x, y, z, w),  # Isaac Lab 3.0 stores quaternions as (x, y, z, w)
             joint_pos=self.joint_pos,
             joint_vel=self.joint_vel,
         )

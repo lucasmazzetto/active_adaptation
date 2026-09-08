@@ -167,14 +167,10 @@ class height_scan(Observation):
         
         if targets is not None:
             if self.env.backend == "isaac":
-                try:
-                    from isaacsim.core.utils.stage import get_current_stage  # Isaac Sim <= 5.x
-                except ImportError:
-                    from isaacsim.core.experimental.utils.stage import get_current_stage  # Isaac Sim >= 6.0
-                stage = get_current_stage()
+                stage = self.env.sim.stage
                 for target in targets:
                     target_asset = self.env.scene[target]
-                    prim_path = target_asset.root_physx_view.prim_paths[0]
+                    prim_path = target_asset.root_view.prim_paths[0]
                     self.raycaster.add_from_path(prim_path, stage=stage)
                     self.target_assets.append(target_asset)
             else:

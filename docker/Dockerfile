@@ -1,12 +1,12 @@
-# Isaac Sim + Isaac Lab + this repository's dependencies.
+# Isaac Sim 6.0 + Isaac Lab 3.0 + this repository's dependencies.
 #
-# Two supported pairings, selected with build args (see docker/compose.yaml):
-#   ISAACSIM_VERSION=5.1.0  ISAACLAB_TAG=v2.3.2                (default; verified for training; headless on driver 595.x)
-#   ISAACSIM_VERSION=6.0.0  ISAACLAB_TAG=v3.0.0-beta2.patch1   (renderer works on 595.x, but Isaac Lab 3.0 uses XYZW quaternions: not training-ready)
-ARG ISAACSIM_VERSION=5.1.0
+# Isaac Sim 6.0 is the first release whose RTX renderer starts on NVIDIA driver 595.x (5.1's
+# crashes in librtx.scenedb on start-up, headless renders included). It pairs with Isaac Lab 3.0,
+# which this codebase targets natively (see active_adaptation/envs/backends/isaac/adapter.py).
+ARG ISAACSIM_VERSION=6.0.0
 FROM nvcr.io/nvidia/isaac-sim:${ISAACSIM_VERSION}
 ARG ISAACSIM_VERSION
-ARG ISAACLAB_TAG=v2.3.2
+ARG ISAACLAB_TAG=v3.0.0-beta2.patch1
 
 # The base image runs as uid 1234 (isaac-sim) and cannot apt-get or write /workspace.
 # Run as root instead; OMNI_KIT_ALLOW_ROOT lets Kit start under root.
@@ -33,27 +33,17 @@ RUN ln -sf /isaac-sim/kit/python/bin/python3 /usr/local/bin/python
 COPY docker/isaac_env.sh /opt/isaac_env.sh
 COPY docker/make_constraints.py /opt/make_constraints.py
 
-# Isaac Lab 2.x only: `toml` is imported by isaaclab/__init__.py and is not bundled with
-# Isaac Sim 5.1, and flatdict is an sdist whose setup.py imports pkg_resources, which pip's
-# isolated build env lacks, making the 2.x isaaclab install fail silently. Isaac Lab 3.x needs
-# neither, and the flatdict trick breaks on the newer pip shipped with Isaac Sim 6.0.
-RUN if [ "${ISAACLAB_TAG#v3}" = "${ISAACLAB_TAG}" ]; then \
-        python -m pip install --no-cache-dir -U wheel toml \
-        && python -m pip install --no-cache-dir --no-build-isolation "flatdict==4.0.1"; \
-    else echo "Isaac Lab ${ISAACLAB_TAG}: skipping 2.x-only toml/flatdict workaround"; fi
-
-# Isaac Lab, installed into Isaac Sim's own Python.
-#   2.x: `--install none` skips the RL frameworks.
-#   3.x: `-i core` installs the core submodules (incl. isaaclab_physx) and no RL extras;
-#        its installer also installs torch 2.10 (cu128) itself, since Isaac Sim 6.0 bundles none.
+# Isaac Lab, installed into Isaac Sim's own Python. `-i core` installs the core submodules
+# (isaaclab, isaaclab_physx, ...) without the RL extras; its installer also installs torch
+# (cu128) itself, since Isaac Sim 6.0 bundles none.
 RUN git clone --depth 1 -b ${ISAACLAB_TAG} https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
     && ln -sf ${ISAACSIM_ROOT_PATH} ${ISAACLAB_PATH}/_isaac_sim \
-    && if [ "${ISAACLAB_TAG#v3}" != "${ISAACLAB_TAG}" ]; then ${ISAACLAB_PATH}/isaaclab.sh -i core; else ${ISAACLAB_PATH}/isaaclab.sh --install none; fi \
-    && bash -c 'source /opt/isaac_env.sh && python -c "import isaaclab; print(\"isaaclab import OK:\", isaaclab.__file__)"'
+    && ${ISAACLAB_PATH}/isaaclab.sh -i core \
+    && bash -c 'source /opt/isaac_env.sh && python -c "import isaaclab, isaaclab_physx; print(\"isaaclab import OK:\", isaaclab.__file__)"'
 
-# Freeze torch/torchvision/numpy AFTER the Isaac Lab install (on 3.x that is where torch comes
-# from) so the repo's dependency install cannot change them. isaac_env.sh must be sourced for
-# the bundled packages to be importable. Keep only requirement lines.
+# Freeze torch/torchvision/numpy AFTER the Isaac Lab install (that is where torch comes from)
+# so the repo's dependency install cannot change them. isaac_env.sh must be sourced for the
+# bundled packages to be importable. Keep only requirement lines.
 RUN bash -c 'source /opt/isaac_env.sh && python /opt/make_constraints.py' \
       | grep -oE '[A-Za-z0-9_.-]+==[0-9][A-Za-z0-9_.]*' > /opt/constraints.txt \
     && cat /opt/constraints.txt \
@@ -72,10 +62,8 @@ RUN python -m pip install --no-cache-dir -c /opt/constraints.txt "mjlab==1.2.0"
 
 # warp: Isaac Sim ships warp as the Kit extension omni.warp.core, which its own extensions are
 # built against, and isaac_env.sh puts that copy first on PYTHONPATH. If pip pulled in a
-# *different* warp-lang (Isaac Lab 2.x pins none, so it took the newest), remove it so there is
-# exactly one warp. The invariant checked below is: the importable warp IS the bundled extension
-# copy (same version, same path). Note that `warp.types.array` disappeared after 1.8, so that older
-# heuristic must not be used here.
+# *different* warp-lang, remove it so there is exactly one warp. The invariant checked below is:
+# the importable warp IS the bundled extension copy (same version, same path).
 RUN bash -c 'source /opt/isaac_env.sh; \
       bundled=$(python -c "import warp; print(warp.config.version)"); \
       pipv=$(python -m pip show warp-lang 2>/dev/null | awk "/^Version:/{print \$2}"); \

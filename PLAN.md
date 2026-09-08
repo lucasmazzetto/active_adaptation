@@ -79,9 +79,9 @@ Concretely (all verified by reading the code):
 ```
  host (Ubuntu 24.04, RTX 3070 Ti 8 GB, driver 595, Docker + NVIDIA toolkit)
  └── docker compose (docker/compose.yaml)
-     └── container: nvcr.io/nvidia/isaac-sim:5.1.0
-         ├── /isaac-sim                 Isaac Sim 5.1.0 + its bundled Python 3.11 + torch 2.7
-         ├── /workspace/isaaclab        Isaac Lab v2.3.2 (git clone, installed into that Python)
+     └── container: nvcr.io/nvidia/isaac-sim:6.0.0
+         ├── /isaac-sim                 Isaac Sim 6.0.0 + its bundled Python 3.12 (+ torch 2.10 cu128 from Isaac Lab)
+         ├── /workspace/isaaclab        Isaac Lab v3.0.0-beta2.patch1 (git clone, `isaaclab.sh -i core`)
          └── /workspace/active_adaptation   <-- this repo, bind-mounted from the host
              ├── .cache/projects.json    (created by entrypoint; enables the `facet` project)
              ├── projects/cfg/task/facet/Go2Force.yaml   (moved + fixed task config)
@@ -127,7 +127,7 @@ Docker 29, Compose v5, runtime list contains `nvidia`, ~68 GB free.
 
 ### Task 1.2 — Confirm the base image is reachable
 ```bash
-docker manifest inspect nvcr.io/nvidia/isaac-sim:5.1.0 | head -5
+docker manifest inspect nvcr.io/nvidia/isaac-sim:6.0.0 | head -5
 ```
 Expected: JSON starting with `"schemaVersion": 2`. No NGC login is required.
 
@@ -143,40 +143,97 @@ that will not fit here. We will train with 1024–2048 robots (Topic 9). Do not 
 Create a new folder `docker/` in the repo root with the five files below.
 
 ### Task 2.1 — `docker/Dockerfile`
+The file below is the one in the repo (Isaac Sim 6.0 + Isaac Lab 3.0). Read the comments: each
+`RUN` exists because of a concrete failure met while building.
 ```dockerfile
-# Isaac Sim 5.1.0 + Isaac Lab v2.3.2 + this repository's dependencies.
-ARG ISAACSIM_VERSION=5.1.0
+# Isaac Sim 6.0 + Isaac Lab 3.0 + this repository's dependencies.
+#
+# Isaac Sim 6.0 is the first release whose RTX renderer starts on NVIDIA driver 595.x (5.1's
+# crashes in librtx.scenedb on start-up, headless renders included). It pairs with Isaac Lab 3.0,
+# which this codebase targets natively (see active_adaptation/envs/backends/isaac/adapter.py).
+ARG ISAACSIM_VERSION=6.0.0
 FROM nvcr.io/nvidia/isaac-sim:${ISAACSIM_VERSION}
+ARG ISAACSIM_VERSION
+ARG ISAACLAB_TAG=v3.0.0-beta2.patch1
+
+# The base image runs as uid 1234 (isaac-sim) and cannot apt-get or write /workspace.
+# Run as root instead; OMNI_KIT_ALLOW_ROOT lets Kit start under root.
+USER root
 
 ENV ACCEPT_EULA=Y \
     PRIVACY_CONSENT=Y \
     OMNI_KIT_ALLOW_ROOT=1 \
     LANG=C.UTF-8 \
     DEBIAN_FRONTEND=noninteractive \
+    HOME=/root \
     ISAACSIM_ROOT_PATH=/isaac-sim \
     ISAACLAB_PATH=/workspace/isaaclab \
-    AA_PATH=/workspace/active_adaptation
+    AA_PATH=/workspace/active_adaptation \
+    PATH=/isaac-sim/kit/python/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential cmake git wget libglib2.0-0 ncurses-term jq \
     && rm -rf /var/lib/apt/lists/*
 
-# Isaac Lab, installed into Isaac Sim's own Python. "--install none" skips RL libraries we do not use.
-RUN git clone --depth 1 -b v2.3.2 https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
-    && ln -sf ${ISAACSIM_ROOT_PATH} ${ISAACLAB_PATH}/_isaac_sim \
-    && ${ISAACLAB_PATH}/isaaclab.sh --install none
-
-# Freeze the versions Isaac Sim ships (torch, numpy, warp) so later pip installs cannot change them.
-COPY docker/make_constraints.py /opt/make_constraints.py
-RUN ${ISAACLAB_PATH}/isaaclab.sh -p /opt/make_constraints.py > /opt/constraints.txt && cat /opt/constraints.txt
-
-# Dependencies of this repo (mirrors pyproject.toml; the repo itself is mounted at run time).
-RUN ${ISAACLAB_PATH}/isaaclab.sh -p -m pip install -c /opt/constraints.txt \
-        setproctitle hydra-core omegaconf wandb einops termcolor pygame onnxruntime onnxscript \
-        jaxtyping "tensordict==0.7.0" "torchrl==0.7.0" imageio av moviepy mujoco linuxfd pdbpp \
-        "simple-raycaster @ git+https://github.com/btx0424/simple-raycaster.git"
+# Isaac Sim only ships `python3`; the docs and scripts in this repo call `python`.
+RUN ln -sf /isaac-sim/kit/python/bin/python3 /usr/local/bin/python
 
 COPY docker/isaac_env.sh /opt/isaac_env.sh
+COPY docker/make_constraints.py /opt/make_constraints.py
+
+# Isaac Lab, installed into Isaac Sim's own Python. `-i core` installs the core submodules
+# (isaaclab, isaaclab_physx, ...) without the RL extras; its installer also installs torch
+# (cu128) itself, since Isaac Sim 6.0 bundles none.
+RUN git clone --depth 1 -b ${ISAACLAB_TAG} https://github.com/isaac-sim/IsaacLab.git ${ISAACLAB_PATH} \
+    && ln -sf ${ISAACSIM_ROOT_PATH} ${ISAACLAB_PATH}/_isaac_sim \
+    && ${ISAACLAB_PATH}/isaaclab.sh -i core \
+    && bash -c 'source /opt/isaac_env.sh && python -c "import isaaclab, isaaclab_physx; print(\"isaaclab import OK:\", isaaclab.__file__)"'
+
+# Freeze torch/torchvision/numpy AFTER the Isaac Lab install (that is where torch comes from)
+# so the repo's dependency install cannot change them. isaac_env.sh must be sourced for the
+# bundled packages to be importable. Keep only requirement lines.
+RUN bash -c 'source /opt/isaac_env.sh && python /opt/make_constraints.py' \
+      | grep -oE '[A-Za-z0-9_.-]+==[0-9][A-Za-z0-9_.]*' > /opt/constraints.txt \
+    && cat /opt/constraints.txt \
+    && test -s /opt/constraints.txt
+
+# Dependencies of this repo (mirrors pyproject.toml; the repo itself is mounted at run time).
+# tensordict/torchrl must be recent: this codebase reads `action_log_prob`, which is only the
+# default log-prob key once `composite_lp_aggregate` defaults to False (tensordict >= ~0.9).
+RUN python -m pip install --no-cache-dir -c /opt/constraints.txt \
+        setproctitle hydra-core omegaconf wandb einops termcolor pygame onnxruntime onnxscript \
+        jaxtyping "tensordict==0.13.0" "torchrl==0.13.3" imageio av moviepy mujoco linuxfd pdbpp \
+        "simple-raycaster @ git+https://github.com/btx0424/simple-raycaster.git"
+
+# mjlab powers the MuJoCo backend (`backend=mujoco`).
+RUN python -m pip install --no-cache-dir -c /opt/constraints.txt "mjlab==1.2.0"
+
+# warp: Isaac Sim ships warp as the Kit extension omni.warp.core, which its own extensions are
+# built against, and isaac_env.sh puts that copy first on PYTHONPATH. If pip pulled in a
+# *different* warp-lang, remove it so there is exactly one warp. The invariant checked below is:
+# the importable warp IS the bundled extension copy (same version, same path).
+RUN bash -c 'source /opt/isaac_env.sh; \
+      bundled=$(python -c "import warp; print(warp.config.version)"); \
+      pipv=$(python -m pip show warp-lang 2>/dev/null | awk "/^Version:/{print \$2}"); \
+      echo "bundled warp=$bundled pip warp-lang=${pipv:-none}"; \
+      if [ -n "$pipv" ] && [ "$pipv" != "$bundled" ]; then python -m pip uninstall -y warp-lang; fi; \
+      python -c "import warp, sys; v=warp.config.version; f=warp.__file__; print(\"warp\", v, f); \
+          assert v == \"$bundled\" and \"/extscache/omni.warp.core-\" in f, (v, f)"'
+
+# Vulkan presentation for the GUI on a hybrid-graphics laptop (displays on the AMD iGPU,
+# rendering on NVIDIA): without Mesa's radeon ICD no presentable surface can be created.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        mesa-vulkan-drivers libvulkan1 libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install this repository into the image. At run time the bind mount replaces the source at
+# the same path, so the editable install keeps pointing at live code while console scripts
+# (aa-list-tasks, ...) and metadata persist in the image.
+COPY . ${AA_PATH}
+RUN python -m pip install --no-cache-dir --no-deps -e ${AA_PATH} \
+    && bash -c 'source /opt/isaac_env.sh && python -c "import active_adaptation; print(\"active_adaptation import OK\")"' \
+    && which aa-list-tasks
+
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
@@ -185,8 +242,8 @@ ENTRYPOINT ["/entrypoint.sh"]
 CMD ["bash"]
 ```
 Why: the official Isaac Lab Dockerfile does the same steps (clone, symlink `_isaac_sim`,
-`isaaclab.sh --install`). `tensordict`/`torchrl` 0.7.0 are the versions pinned in
-`uv.lock`. Torch stays at the 2.7.x that Isaac Sim ships (also what `uv.lock` pins).
+`isaaclab.sh -i core`). Torch comes from the Isaac Lab installer (Isaac Sim 6.0 bundles none),
+and the constraints file freezes it before the repo's own dependencies are installed.
 
 ### Task 2.2 — `docker/make_constraints.py`
 ```python
@@ -253,7 +310,13 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: active-adaptation-isaac:5.1.0
+      args:
+        ISAACSIM_VERSION: ${ISAACSIM_VERSION:-6.0.0}
+        ISAACLAB_TAG: ${ISAACLAB_TAG:-v3.0.0-beta2.patch1}
+    # Isaac Sim 6.0 + Isaac Lab 3.0: the only supported pairing. The codebase targets the Isaac
+    # Lab 3.0 API natively (XYZW quaternions converted in envs/backends/isaac/adapter.py), and
+    # 6.0's renderer is the first that starts on NVIDIA driver 595.x, so the GUI works too.
+    image: active-adaptation-isaac:${ISAACSIM_VERSION:-6.0.0}
     runtime: nvidia
     deploy:
       resources:
@@ -286,7 +349,7 @@ services:
       - isaac-logs:/root/.nvidia-omniverse/logs
       - isaac-data:/root/.local/share/ov/data
 
-  aa-gui:                              # optional: play.py with a window (run `xhost +local:root` on the host first)
+  aa-gui:                              # play.py with a window (run `xhost +local:root` on the host first)
     extends: aa
     profiles: [gui]
     environment:
@@ -307,6 +370,9 @@ volumes:
   isaac-logs: {}
   isaac-data: {}
 ```
+Why: `network_mode: host` and offline wandb keep the container self-contained; named volumes
+keep Kit's shader and extension caches, so the second start is fast. The `gui` profile shares
+the X11 socket for `play.py ... headless=false`.
 
 ### Task 2.6 — `docker/.env.example` and `.gitignore`
 `docker/.env.example`:
@@ -329,7 +395,7 @@ Check:
 ```bash
 docker compose run --rm aa python -c "import torch, isaaclab, tensordict, torchrl; print(torch.__version__, torch.cuda.is_available())"
 ```
-Expected: a line like `2.7.0+cu128 True` after the entrypoint prints `projects.json: {...}`.
+Expected: a line like `2.10.0+cu128 True` after the entrypoint prints `projects.json: {...}`.
 While this builds, continue with Topic 3.
 
 ---
@@ -890,65 +956,71 @@ docker compose run --rm aa python scripts/play.py task=facet/Go2Force algo=ppo_f
 | `AttributeError: 'PPOPolicy' object has no attribute 'obs_transform'` | Task 7.3 not applied | Topic 7 |
 | `get_rollout_policy() got an unexpected keyword argument 'critic'` | Task 7.1 not applied | Topic 7 |
 | Isaac Sim exits with EULA / privacy prompt | env vars missing | `ACCEPT_EULA=Y PRIVACY_CONSENT=Y` are in compose; check `docker compose config` |
-| `Failed to create any GPU devices` / Vulkan errors | container cannot see the driver | `NVIDIA_DRIVER_CAPABILITIES=all`, `runtime: nvidia`; `docker run --rm --gpus all nvcr.io/nvidia/isaac-sim:5.1.0 nvidia-smi` |
+| `Failed to create any GPU devices` / Vulkan errors | container cannot see the driver | `NVIDIA_DRIVER_CAPABILITIES=all`, `runtime: nvidia`; `docker run --rm --gpus all nvcr.io/nvidia/isaac-sim:6.0.0 nvidia-smi` |
 | `CUDA out of memory` | too many robots for 8 GB | lower `task.num_envs`; Task 9.3 |
 | Very slow first start | shader compilation | wait; caches are persisted in named volumes |
 | `ModuleNotFoundError: active_adaptation` | entrypoint skipped (e.g. `docker exec` into a container) | `source /opt/isaac_env.sh && pip install --no-deps -e /workspace/active_adaptation` |
 | Build fails: `apt-get ... Permission denied` | base image runs as uid 1234 | `USER root` in the Dockerfile (already applied) |
 | Build fails: `Invalid requirement: '\x1b[3g'` | `isaaclab.sh` writes terminal escape codes into the captured constraints file | generate constraints by sourcing `isaac_env.sh` and filter with `grep -oE` (already applied) |
-| `import isaaclab` fails after build | the `isaaclab` core install failed silently because `flatdict`'s `setup.py` needs `pkg_resources` | pre-install `flatdict==4.0.1 --no-build-isolation` before `isaaclab.sh --install` (already applied); the Dockerfile now asserts `import isaaclab` |
-| `AttributeError: ... _external_force_b` | Isaac Lab 2.3 removed the buffer | Topic 6b |
-| `ModuleNotFoundError: No module named 'toml'` on `import isaaclab` | `isaaclab/__init__.py` imports `toml`, which Isaac Sim does not bundle | `pip install toml` before the Isaac Lab install (already applied) |
-| `module 'warp.types' has no attribute 'array'`, Isaac extensions fail to start | pip pulled `warp-lang` 1.17 over Isaac Sim's bundled warp 1.8.2 | use the bundled `omni.warp.core` extension and uninstall the pip copy (already applied) |
 | `KeyError: 'action_log_prob'` in the PPO update | tensordict too old, so the log-prob key is `sample_log_prob` | tensordict/torchrl must be recent (Topic 6c) |
 | `ValueError: Timer simulation already has a parent rollout` after training | `ScopedTimer` singletons refused re-use across scopes | Topic 6c |
 | `AttributeError: 'NoneType' object has no attribute 'split'` at start-up | wandb leaves `run.name` unset offline | Topic 6c |
 | `ConfigAttributeError: Missing key backend` from `eval.py` | `cfg/eval.yaml` lacked `backend`/`device` | Topic 6c |
 | GUI: `cannot open display` | X11 not shared | `xhost +local:root`, `--profile gui`, `echo $DISPLAY` non-empty |
+| `... takes 1 positional argument but 2 positional arguments ... were given` from a `write_*_to_sim_index` | Isaac Lab 3.0 writers are keyword-only | call them through `IsaacArticulation` (Topic 6d), never on the raw asset |
+| `'WrenchComposer' object has no attribute 'composed_force_as_torch'` | 3.0 renamed the read-back to `out_force_b` / `out_torque_b` | use `utils/wrench.py` helpers (already applied) |
+| `DeprecationWarning: root_physx_view` | 3.0 alias of `root_view` | use `asset.root_view` |
+| Robot spawns / resets with a wrong orientation, or heading obs look rotated | a quaternion crossed the Isaac boundary un-converted | run `scripts/tools/check_isaac_quat.py` (Topic 6d); it names the stray read site |
+| Video is black, or `Failed to upload DomeLight texture` | sky HDR not downloaded, or (before this fix) the Kit app loop was never pumped headless | download the assets (README); `env_base.render` pumps `omni.kit.app` when no GUI |
+| `Reading .torch on a wp.quatf-typed ProxyArray` warnings | `WARN_ON_TORCH_QUATF_ACCESS=1` is set | expected only from `adapter.py`; anything else is a bug (see row above) |
 
 ---
 
-## 6d. (added during implementation) Why the GUI crashed, the Isaac Sim 6.0 experiment, and the decision
+## 6d. (added during implementation) Why the GUI crashed, and the move to Isaac Sim 6.0 / Isaac Lab 3.0
 
 ### What was wrong
 Isaac Sim 5.1's RTX renderer crashes on start-up on this machine (driver 595.84), headless or
-not, with the **stock** `nvcr.io/nvidia/isaac-sim:5.1.0` image too, so it is not our setup.
+not, with the **stock** `nvcr.io/nvidia/isaac-sim:5.1.0` image too, so it was not our setup.
 Isaac Sim 5.1 predates the 595 driver series. Physics-only training never touches the
-renderer, which is why headless training works. Vulkan presentation on this hybrid-graphics
-laptop (displays on the Radeon iGPU, rendering on the RTX 3070 Ti) additionally needed Mesa's
-`radeon` ICD inside the container; that is fixed in the Dockerfile and is necessary but not
-sufficient.
+renderer, which is why headless training worked on 5.1 while the GUI and video did not.
+Vulkan presentation on this hybrid-graphics laptop (displays on the Radeon iGPU, rendering on
+the RTX 3070 Ti) additionally needs Mesa's `radeon` ICD inside the container (in the Dockerfile).
 
-### The 6.0 experiment (kept, parametrized, not the default)
-The stock `isaac-sim:6.0.0` image's RTX renderer **does** start on this driver. Isaac Sim 6.0
-pairs with Isaac Lab 3.0 (`v3.0.0-beta2.patch1`), so the Dockerfile/compose take
-`ISAACSIM_VERSION` / `ISAACLAB_TAG` build args; the 6.0 image builds and this repo reaches the
-first environment reset on it after these backward-compatible edits (all on this branch):
+### The fix: target Isaac Sim 6.0 + Isaac Lab 3.0 natively
+Isaac Sim 6.0's renderer starts on this driver. It pairs with Isaac Lab 3.0
+(`v3.0.0-beta2.patch1`), whose API differs from 2.3 in four ways that matter here. The repo
+now targets 3.0 only (no 2.x fallbacks); the 5.1 pairing is gone.
 
-* `SimulationCfg(physics=PhysxCfg)` from `isaaclab_physx.physics` (3.0) vs `physx=` (2.x)
-* `SimulationContext` stage handling without `attach_stage_to_usd_context` / `get_initial_stage`
-* `has_gui` property vs method; `clear_all_callbacks` guard
-* `import isaaclab.sim as sim_utils` instead of the re-export through `isaaclab.markers`
-* `isaacsim.core.utils` (moved to `extsDeprecated` in 6.0): local `set_seed` fallback, stage lookup fallback
-* PhysX view getters return warp arrays and setters want CPU `float32`/`int32` warp arrays
-  (`envs/mdp/utils/physx_view.py`); mass / material / CoM randomizers routed through it
-* `asset.data.*` are warp-backed `ProxyArray`s: `.torch` before `wp.from_torch`
+| Isaac Lab 3.0 change | Where it is handled |
+|---|---|
+| PhysX is a pluggable backend: `SimulationCfg(physics=PhysxCfg(...))` from `isaaclab_physx.physics`; `SimulationContext` owns the stage (`sim.stage`), no `attach_stage_to_usd_context` | `envs/backends/isaac/env.py` |
+| Every `asset.data.*` / `sensor.data.*` field is a warp-backed `ProxyArray` (`.torch` gives a zero-copy tensor) | `IsaacData` in `envs/backends/isaac/adapter.py` unwraps to tensors |
+| **Quaternions are `(x, y, z, w)`**; this repo and its MuJoCo backends are `(w, x, y, z)` | `IsaacData` converts every quaternion-bearing read (`*_quat_w`, `*_pose_w`, `*_state_w`, `default_root_state`) to WXYZ; `IsaacArticulation` converts root pose/state writes back; `AssetCfg` emits XYZW into `InitialStateCfg`; marker orientations go through `to_isaac_quat` |
+| Writers split into keyword-only `*_index` / `*_mask`; joint/body index tensors must be `int32` | `IsaacArticulation` implements the repo's backend-agnostic names (`write_root_state_to_sim`, `write_joint_state_to_sim`, `set_joint_position_target`, ...) on the `_index` API and casts indices |
+| PhysX view getters return warp arrays; setters take CPU `float32` / `int32` warp arrays; `root_physx_view` is a deprecated alias of `root_view` | `envs/mdp/utils/physx_view.py`; mass / material / CoM randomizers and two rewards use `root_view` |
+| Wrench composer: `add/set_forces_and_torques_index`, read-back `out_force_b` / `out_torque_b` | `envs/mdp/utils/wrench.py` |
+| `isaacsim.core.utils` moved to `extsDeprecated`; `has_gui` is a property; no `clear_all_callbacks` | `env_base.py` seeds itself; `IsaacSimAdapter.has_gui()`; `close()` |
 
-**Blocker:** Isaac Lab 3.0 changed the quaternion convention from **WXYZ to XYZW** (its
-migration guide, "Quaternion Format"). This codebase's math (`utils/math.py`) and its ~24
-quaternion reads from asset data plus the reset/marker writes are all WXYZ. Nothing would
-crash; orientations would be silently wrong and training would proceed on garbage. Migrating
-means a conversion boundary in the Isaac backend and a correctness check against the 5.1
-setup. Deferred.
+The adapter is the **only** place that knows about Isaac Lab's conventions. MDP code, the
+math helpers and the MuJoCo backends are unchanged. The scene adapter wraps every articulation,
+rigid object and sensor once and caches the wrappers, so `scene.articulations["robot"]` always
+returns the same object.
 
-### Decision (2026-09-08)
-Train on the verified Isaac Sim 5.1 + Isaac Lab 2.3.2 image (the compose default). For seeing
-the robot, use the repo's MuJoCo backend (`backend=mujoco`), which renders with OpenGL and
-never touches the RTX renderer; `mjlab` is installed in the image for it. Fixes needed on that
-path: the isaaclab-to-mjlab import guards catch `ImportError` (they caught only
-`ModuleNotFoundError`, which the real failure is not), the legacy `impedance.py` no longer
-imports Isaac Lab, marker calls are guarded, and `MJScene` reads scene-config fields from the
-class as well as the instance (the `configclass` stub leaves them on the class).
+### How to prove the quaternion boundary is right
+`scripts/tools/check_isaac_quat.py` builds `Go2Force` with 4 robots and checks, against
+quantities Isaac Lab computes internally (so independent of any convention):
+
+1. `heading_w` equals the yaw of `euler_from_quat(root_quat_w)` (repo WXYZ math);
+2. `projected_gravity_b` equals `quat_rotate_inverse(root_quat_w, (0, 0, -1))`;
+3. a root state written through the adapter reads back with the same quaternion;
+4. with `WARN_ON_TORCH_QUATF_ACCESS=1` no raw quaternion read happens outside `adapter.py`.
+
+```bash
+cd docker && docker compose run --rm aa python scripts/tools/check_isaac_quat.py \
+    task=facet/Go2Force algo=ppo_facet_train task.num_envs=4 wandb.mode=disabled
+```
+If 1 or 2 fail with a 90/180 degree yaw error or gravity on the wrong axis, the roll direction
+in `from_isaac_quat` / `to_isaac_quat` is inverted.
 
 ---
 
@@ -967,21 +1039,37 @@ class as well as the instance (the `configclass` stub leaves them on the class).
 
 ## 11b. What was actually verified on this machine
 
-All of the following were run end to end in the container on the RTX 3070 Ti:
+All of the following were run end to end in the container on the RTX 3070 Ti Laptop GPU
+(8 GB, driver 595.84), Isaac Sim 6.0.0 + Isaac Lab v3.0.0-beta2.patch1, laptop on AC power.
 
 | Check | Result |
 |---|---|
-| `docker compose build` | succeeds; image `active-adaptation-isaac:5.1.0`, 23.6 GB |
-| torch / CUDA in container | torch 2.7.0, `cuda_available True`, RTX 3070 Ti Laptop GPU |
-| warp | 1.8.2, resolved to Isaac Sim's bundled `omni.warp.core` |
+| `docker compose build` | succeeds; image `active-adaptation-isaac:6.0.0`, 33.5 GB |
+| torch / CUDA in container | torch 2.10 (cu128), `cuda_available True`; warp 1.13.0 resolved to Isaac Sim's bundled `omni.warp.core` |
 | `aa-list-tasks` | lists `facet/Go2Force` and `facet/B1Z1` |
-| Training, 64 envs, 97 iterations | completes, exit code 0, including post-training evaluation |
-| Checkpoints | `checkpoint_0.pt`, `checkpoint_final.pt`, `checkpoint_latest.pt` written under the run's `wandb/offline-run-*/files/` |
-| External wrench round-trip | applying 12.5 N to body 0 reads back 12.5 N through the composer |
-| FACET impulse actually applied | 150 N impulse measured on the base while stepping (this is what Task 7.6 fixes) |
-| `scripts/eval.py` on the final checkpoint | loads all 14 modules, rolls out, reports `eval/episode_len` |
+| `scripts/tools/check_isaac_quat.py` (4 envs, 20 steps) | PASSED: heading, projected gravity and root-state round trip agree with the WXYZ math; 484 raw quaternion reads, all from `adapter.py` |
+| Training, 16 envs, 20k frames | 39/39 iterations, exit 0, `checkpoint_final.pt` written, no deprecation warnings |
+| Same checkpoint (`checkpoint_100.pt`, trained on 5.1) evaluated with 256 envs, seed 0 | 5.1 image + old code: survival 71.1, crash 51%, fall 49%. 6.0 image + this code: survival 72.2, crash 58%, fall 43%. Agrees within noise |
+| GUI: `play.py ... headless=false` via the `gui` profile | Isaac Sim window (`isaaclab.python.kit` experience) opens on driver 595.84, environment steps with the viewport camera controller and debug draw; first start needs ~3.5 min of shader compilation |
+| Training, 4096 envs | 4.1 s/iteration over 11 iterations (warm-up included), 6.7 GB VRAM |
+| Video: `eval.py ... eval_render=true` (4 envs) | writes `active_adaptation/recording-<time>.mp4`, 1000 frames at 50 fps with real content (mean intensity 36; the first attempt was all black, see below) |
 
-The 60k-frame smoke run is far too short to produce a competent gait; it only proves the
+Bugs found by these gates and fixed on the way: the Isaac Lab 3.0 writers are keyword-only
+(`root_pose=`, `position=`, ...); the wrench composer read-back is `out_force_b`; warp 1.13's
+Python-scope `rand_init` rejects `uint32` (FACET seed kept as an int); Isaac Lab sensors refresh
+lazily on `sensor.data` access, so the sensor wrapper must never cache that container (the first
+6.0 evaluation had zero contacts and looked far too good); headless RGB capture needs the Kit app
+loop pumped explicitly (`omni.kit.app.get_app().update()`, as Isaac Lab 3.0's own recorder does)
+because `sim.render()` no longer does it without a Kit visualizer, otherwise the annotator
+returns an empty array forever and the video is black; the perspective camera is positioned via
+`isaacsim.core.rendering_manager.ViewportManager`, since `sim.set_camera_view` only reaches
+visualizers; `headless=false` must request the `kit` visualizer (`active_adaptation/__init__.py`).
+
+If Kit logs `Failed to upload DomeLight texture ... .hdr`, the sky HDR from the asset dataset is
+missing (README, "Asset download and placement"); the scene then falls back to an untextured dome
+light so renders are still lit.
+
+The 20k-frame smoke run is far too short to produce a competent gait; it only proves the
 pipeline. Real training is Task 9.3.
 
 ---
@@ -994,5 +1082,7 @@ pipeline. Real training is Task 9.3.
 - [ ] `aa-list-tasks` prints `facet/Go2Force`
 - [ ] Smoke test (Task 9.2) completes with finite losses and increasing episode length
 - [ ] Teacher run (Task 9.3) writes checkpoints; student run (Task 9.4) loads them
-- [ ] A rendered video or GUI session shows the robot tracking the setpoint and yielding to pushes
+- [x] A rendered video or GUI session shows the robot tracking the setpoint and yielding to pushes
+- [x] `scripts/tools/check_isaac_quat.py` passes on the Isaac Sim 6.0 image
+- [x] `play.py ... headless=false` through the `gui` profile opens an Isaac Sim window
 - [ ] README and `projects/facet/readme.md` updated

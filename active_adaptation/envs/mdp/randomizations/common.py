@@ -8,11 +8,6 @@ from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
 from active_adaptation.envs.mdp.utils.wrench import set_external_wrench
 from active_adaptation.envs.mdp.utils.physx_view import view_to_torch, torch_to_view, view_indices
 
-
-def _flatten_inertias(like) -> bool:
-    # Isaac Lab >= 3.0 (warp views) takes inertias flattened per instance; <= 2.3 took (N, B, 9).
-    return not isinstance(like, torch.Tensor)
-
 try:
     import isaaclab.utils.string as string_utils
 except ImportError:  # isaaclab.utils needs pxr, so it raises ImportError (not
@@ -93,12 +88,10 @@ def _set_external_wrench(
     torques: torch.Tensor,
     body_ids=None,
 ):
-    """Set (replace) the external wrench on ``body_ids`` across simulator versions.
+    """Set (replace) the external wrench on ``body_ids``.
 
-    Delegates to :mod:`active_adaptation.envs.mdp.utils.wrench`, which prefers the Isaac Lab
-    >= 2.3 wrench composer and falls back to the legacy ``_external_force_b`` buffers used by
-    Isaac Lab <= 2.2 and this repo's MuJoCo backend. Isaac Lab 3.0 removed both the legacy
-    buffers and the deprecated ``set_external_force_and_torque`` shim this function used to call.
+    Delegates to :mod:`active_adaptation.envs.mdp.utils.wrench`, which uses the Isaac Lab wrench
+    composer on the Isaac backend and the ``_external_force_b`` buffers of this repo's MuJoCo backend.
     """
     set_external_wrench(asset, forces=forces, torques=torques, body_ids=body_ids)
 
@@ -223,7 +216,7 @@ class perturb_body_materials(Randomization):
 
         if self.env.backend == "isaac":
             num_shapes_per_body = []
-            for link_path in self.asset.root_physx_view.link_paths[0]:
+            for link_path in self.asset.root_view.link_paths[0]:
                 link_physx_view = self.asset._physics_sim_view.create_rigid_body_view(link_path)  # type: ignore
                 num_shapes_per_body.append(link_physx_view.max_shapes)
             cumsum = np.cumsum([0,] + num_shapes_per_body)
@@ -290,9 +283,8 @@ class perturb_body_materials(Randomization):
         if self.env.backend == "isaac":
             logging.info(f"Randomize body materials of {self.body_names} upon startup.")
 
-            view = self.asset.root_physx_view
-            raw = view.get_material_properties()
-            materials = view_to_torch(raw).clone().cpu()
+            view = self.asset.root_view
+            materials = view_to_torch(view.get_material_properties()).clone().cpu()
             if self.homogeneous:
                 shape = (self.num_envs, 1)
             else:
@@ -303,8 +295,7 @@ class perturb_body_materials(Randomization):
                 materials[:, self.shape_ids, 1] = self.dynamic_friction_buckets.cpu()[torch.randint(0, self.num_buckets, shape)]
             if self.restitution_range is not None:
                 materials[:, self.shape_ids, 2] = self.restitution_buckets.cpu()[torch.randint(0, self.num_buckets, shape)]
-            indices = view_indices(self.asset.num_instances, raw)
-            view.set_material_properties(torch_to_view(materials.reshape(view_to_torch(raw).shape), raw), indices)
+            view.set_material_properties(torch_to_view(materials), view_indices(self.asset.num_instances))
             self.asset.data.body_materials = materials.to(self.device)
         elif self.env.backend == "mjlab":
             logging.info(f"Randomize body materials of {self.geom_names} upon startup.")
@@ -404,12 +395,10 @@ class perturb_body_mass(Randomization):
     def startup(self):
         logging.info(f"Randomize body masses of {self.body_names} upon startup.")
         if self.env.backend == "isaac":
-            # PhysX "model" properties (masses/inertias) are set on the CPU on every Isaac Lab
-            # version; getters return torch (<= 2.3) or warp (>= 3.0) arrays. Work in torch on
-            # the CPU and convert at the view boundary.
-            view = self.asset.root_physx_view
-            raw = view.get_masses()
-            masses = view_to_torch(raw).clone().cpu()
+            # PhysX "model" properties (masses/inertias) must be written on the CPU; the view
+            # returns/expects warp arrays, so work in torch on the CPU and convert at the boundary.
+            view = self.asset.root_view
+            masses = view_to_torch(view.get_masses()).clone().cpu()
             inertias = view_to_torch(view.get_inertias()).clone().cpu().reshape(masses.shape[0], masses.shape[1], 9)
             body_ids = torch.as_tensor(self.body_ids, device="cpu")
             mass_ranges = self.mass_ranges.cpu()
@@ -419,9 +408,9 @@ class perturb_body_mass(Randomization):
             ).cpu()
             masses[:, body_ids] *= scale
             inertias[:, body_ids] *= scale.unsqueeze(-1)
-            indices = view_indices(self.asset.num_instances, raw)
-            view.set_masses(torch_to_view(masses, raw), indices)
-            view.set_inertias(torch_to_view(inertias.flatten(1) if _flatten_inertias(raw) else inertias, raw), indices)
+            indices = view_indices(self.asset.num_instances)
+            view.set_masses(torch_to_view(masses), indices)
+            view.set_inertias(torch_to_view(inertias.flatten(1)), indices)  # (N, B*9) per instance
             assert torch.allclose(view_to_torch(view.get_masses()).cpu(), masses)
         elif self.env.backend == "mjlab":
             num_bodies = self.global_body_ids.numel()
@@ -482,9 +471,8 @@ class perturb_body_com(Randomization):
     def startup(self):
         logging.info(f"Randomize body CoM of {self.body_names} upon startup.")
         if self.env.backend == "isaac":
-            view = self.asset.root_physx_view
-            raw = view.get_coms()
-            coms = view_to_torch(raw).clone().cpu()
+            view = self.asset.root_view
+            coms = view_to_torch(view.get_coms()).clone().cpu()
             body_ids = torch.as_tensor(self.body_ids, device="cpu")
             pos_ranges = self.pos_ranges.cpu()
             rand_sample = uniform(
@@ -493,8 +481,7 @@ class perturb_body_com(Randomization):
             ).cpu()
             rand_sample[:, :, 0] *= 0.5
             coms[:, body_ids, :3] += rand_sample
-            indices = view_indices(self.asset.num_instances, raw)
-            view.set_coms(torch_to_view(coms, raw), indices)
+            view.set_coms(torch_to_view(coms), view_indices(self.asset.num_instances))
             assert torch.allclose(view_to_torch(view.get_coms()).cpu(), coms)
         elif self.env.backend == "mjlab":
             num_bodies = self.global_body_ids.numel()
@@ -712,7 +699,7 @@ class drag(Randomization):
         self.body_indices, self.body_names = self.asset.find_bodies(body_names)
         self.num_bodies = len(self.body_indices)
         self.drag_coeffs = sample_uniform((self.num_envs, self.num_bodies, 1), *drag_range, self.device).expand(self.num_envs, self.num_bodies, 3)
-        self.default_mass_total = view_to_torch(self.asset.root_physx_view.get_masses())[0].sum() * 9.81
+        self.default_mass_total = view_to_torch(self.asset.root_view.get_masses())[0].sum() * 9.81
 
         with torch.device(self.env.device):
             self.forces = torch.zeros(self.env.num_envs, len(self.body_indices), 3)
@@ -800,7 +787,7 @@ class pull(Randomization):
         self.asset = self.env.scene.articulations["robot"]
         self.drag_prob = drag_prob
         self.drag_range = drag_range
-        self.default_mass_total = view_to_torch(self.asset.root_physx_view.get_masses())[0].sum().to(self.device) * 9.81
+        self.default_mass_total = view_to_torch(self.asset.root_view.get_masses())[0].sum().to(self.device) * 9.81
         
         with torch.device(self.device):
             self.forces = torch.zeros(self.num_envs, 3)

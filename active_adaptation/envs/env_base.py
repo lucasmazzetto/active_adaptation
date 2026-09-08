@@ -22,15 +22,6 @@ from active_adaptation.envs.utils import GroundQuery
 from active_adaptation.registry import RegistryMixin
 from active_adaptation.utils.profiling import ScopedTimer
 
-if active_adaptation.get_backend() == "isaac":
-    try:
-        import isaacsim.core.utils.torch as torch_utils
-    except ImportError:
-        # Isaac Sim 6.0 moved isaacsim.core.utils to extsDeprecated, where it is not importable
-        # by default. The only thing we used from it is set_seed; see _set_seed for the fallback.
-        torch_utils = None
-
-
 EMA_DECAY = 0.99
 
 
@@ -597,9 +588,7 @@ class _EnvBase(EnvBase, RegistryMixin):
                 rep.set_global_seed(seed)
             except ModuleNotFoundError:
                 pass
-            if torch_utils is not None:
-                return torch_utils.set_seed(seed)
-            # Same effect as isaacsim.core.utils.torch.set_seed (random, numpy, torch, CUDA).
+            # isaacsim.core.utils.torch.set_seed is deprecated on Isaac Sim 6.0; this is what it did.
             import random
             random.seed(seed)
             np.random.seed(seed)
@@ -617,10 +606,24 @@ class _EnvBase(EnvBase, RegistryMixin):
             return None
         if mode == "rgb_array":
             if hasattr(self, "_rgb_annotator"):
+                # Mirrors Isaac Lab 3.0's own perspective video recorder. Without a Kit visualizer
+                # (headless), `sim.render()` does not pump the Kit app loop, and only that loop
+                # drives RTX/replicator rendering, so pump it here. The annotator returns an empty
+                # array until the first frame is rendered, a dict on some versions, and a flat
+                # buffer on others.
+                if not self.sim.has_gui():
+                    import omni.kit.app
+
+                    omni.kit.app.get_app().update()
+                w, h = self.cfg.viewer.resolution
                 rgb_data = self._rgb_annotator.get_data()
-                rgb_data = np.frombuffer(rgb_data, dtype=np.uint8).reshape(
-                    *rgb_data.shape
-                )
+                if isinstance(rgb_data, dict):
+                    rgb_data = rgb_data.get("data", np.array([], dtype=np.uint8))
+                rgb_data = np.asarray(rgb_data, dtype=np.uint8)
+                if rgb_data.size == 0:
+                    return np.zeros((h, w, 3), dtype=np.uint8)
+                if rgb_data.ndim == 1:
+                    rgb_data = rgb_data.reshape(h, w, -1)
                 return rgb_data[:, :, :3]
             raise NotImplementedError(
                 f"rgb_array mode not supported for backend '{self.backend}'. "
@@ -642,7 +645,6 @@ class _EnvBase(EnvBase, RegistryMixin):
         if not self.is_closed:
             if self.backend == "isaac":
                 del self.scene
-                getattr(self.sim, "clear_all_callbacks", lambda: None)()
                 self.sim.clear_instance()
             elif self.backend == "mjlab" and self.sim.has_gui():
                 self.sim.viewer.close()

@@ -30,12 +30,7 @@ if active_adaptation.get_backend() == "isaac":
         VisualizationMarkersCfg,
     )
     import isaaclab.sim as sim_utils
-def _as_torch(x) -> torch.Tensor:
-    """Isaac Lab >= 3.0 exposes asset data as warp-backed ProxyArrays with a `.torch` view;
-    <= 2.3 hands out plain tensors. warp.from_torch needs the real tensor."""
-    if isinstance(x, torch.Tensor):
-        return x
-    return x.torch if hasattr(x, "torch") else torch.as_tensor(x)
+    from active_adaptation.envs.backends.isaac.adapter import to_isaac_quat
 
 
 def saturate(x: torch.Tensor, a: float):
@@ -263,7 +258,9 @@ class ImpedanceCommandManager(Command):
             self.ee_target_archive = torch.load(path)["target_pos"].to(self.device)
             self.ee_target_archive += self.asset.data.body_pos_w[0, self.arm_body_id] - self.asset.data.root_link_pos_w[0]
         
-        self.seed = wp.rand_init(0)
+        # Python-scope wp.rand_init takes an int and returns a uint32 (warp >= 1.13 rejects uint32
+        # inputs), so keep the seed as a plain int in int32 range: the kernels take `seed: wp.int32`.
+        self.seed = int(wp.rand_init(0)) & 0x7FFFFFFF
 
         if self.env.sim.has_gui() and self.env.backend == "isaac":
             self.ref_pos_marker = make_frame_marker("ref_pos")
@@ -426,7 +423,7 @@ class ImpedanceCommandManager(Command):
             dim=[self.num_envs],
             inputs=[
                 wp.from_torch(mask, dtype=wp.bool, return_ctype=True),
-                wp.from_torch(_as_torch(self.asset.data.root_link_pos_w), dtype=wp.vec3, return_ctype=True),
+                wp.from_torch(self.asset.data.root_link_pos_w, dtype=wp.vec3, return_ctype=True),
                 wp.from_torch(self.root_link_rpy_w, dtype=wp.vec3, return_ctype=True),
                 self.seed,
             ],
@@ -441,7 +438,7 @@ class ImpedanceCommandManager(Command):
         )
     
     def update(self):
-        self.seed = wp.rand_init(self.seed)
+        self.seed = int(wp.rand_init(self.seed)) & 0x7FFFFFFF
         mask = self.env.episode_length_buf % 100 == 0
         root_link_pos = self.asset.data.root_link_pos_w
         self.root_link_rpy_w = euler_from_quat(self.asset.data.root_link_quat_w)
@@ -451,7 +448,7 @@ class ImpedanceCommandManager(Command):
             dim=[self.num_envs],
             inputs=[
                 wp.from_torch(mask, dtype=wp.bool, return_ctype=True),
-                wp.from_torch(_as_torch(root_link_pos), dtype=wp.vec3, return_ctype=True),
+                wp.from_torch(root_link_pos, dtype=wp.vec3, return_ctype=True),
                 wp.from_torch(self.root_link_rpy_w, dtype=wp.vec3, return_ctype=True),
                 self.seed,
             ],
@@ -546,7 +543,8 @@ class ImpedanceCommandManager(Command):
             return  # markers are only created on the isaac backend with a GUI
         self.ref_pos_marker.visualize(
             translations=self.pos_base.pos_w[:, self.ref_steps].reshape(-1, 3),
-            orientations=quat_from_euler_xyz(self.rot_base.pos_w[:, self.ref_steps].reshape(-1, 3)),
+            # VisualizationMarkers takes (x, y, z, w) on Isaac Lab 3.0; the repo math is (w, x, y, z).
+            orientations=to_isaac_quat(quat_from_euler_xyz(self.rot_base.pos_w[:, self.ref_steps].reshape(-1, 3))),
         )
         # setpoints (base and eef)
         self.setpoint_marker.visualize(self.setpoint_w[:, :3])

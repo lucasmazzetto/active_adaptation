@@ -140,6 +140,10 @@ def init(cfg: DictConfig, auto_rank: bool):
         from isaaclab.app import AppLauncher
 
         app_config = OmegaConf.to_container(cfg.app)
+        # Isaac Lab 3.0 opens a window only for an explicitly requested "kit" visualizer; `headless`
+        # alone is deprecated and falls back to headless. Map the repo's `headless=false` onto it.
+        if not app_config.get("headless", True) and not app_config.get("visualizer"):
+            app_config["visualizer"] = ["kit"]
         AppLauncher(app_config, distributed=is_distributed(), device=cfg.device)
 
     import_environment_projects()

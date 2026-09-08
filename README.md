@@ -2,7 +2,7 @@
 
 <!-- ## Note (2025.8.26)
 
-Thanks for taking a look! The code base was shared for multiple projects so it contains some old code that are no-longer usable. We are actively working on **cleaning up and refactoring to make it camera-ready** (e.g, compatible with Isaac Sim 5.0). It will be ready by the date of CoRL 2025. The core implementation of our CoRL paper [FACET](https://arxiv.org/abs/2505.06883) can be found at `active_adaptation/envs/mdp/commands/facet_commands`.
+Thanks for taking a look! The code base was shared for multiple projects so it contains some old code that are no-longer usable. We are actively working on **cleaning up and refactoring to make it camera-ready** (e.g, compatible with Isaac Sim 6.0 / Isaac Lab 3.0). It will be ready by the date of CoRL 2025. The core implementation of our CoRL paper [FACET](https://arxiv.org/abs/2505.06883) can be found at `active_adaptation/envs/mdp/commands/facet_commands`.
 
 Meanwhile, the code for the live demo (runinng Mujoco in browsers) is here [https://github.com/Facet-Team/facet]. -->
 
@@ -34,18 +34,18 @@ Projects using this codebase:
       IsaacLab/
         _isaac_sim/
    ```
-2. Install [Isaac Sim 5.1.0](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/download.html) by downloading the latest release and unzip it to a desired location `$ISAACSIM_PATH`. Installing via `pip` is also fine.
+2. Install [Isaac Sim 6.0](https://docs.isaacsim.omniverse.nvidia.com/latest/installation/download.html) by downloading the release and unzipping it to a desired location `$ISAACSIM_PATH`. Installing via `pip` is also fine. The Isaac backend targets Isaac Lab 3.0 (`v3.0.0-beta2.patch1`); Isaac Sim 5.x / Isaac Lab 2.x are not supported.
 3. Install [Isaac Lab](https://github.com/isaac-sim/IsaacLab) and setup a conda environment:
    ```bash
-   conda create -n lab python=3.11
+   conda create -n lab python=3.12
    conda activate lab
    # install IsaacLab to the exisiting conda environment
    # git clone https://github.com/isaac-sim/IsaacLab.git
-   git clone git@github.com:isaac-sim/IsaacLab.git # SSH recommended
+   git clone -b v3.0.0-beta2.patch1 git@github.com:isaac-sim/IsaacLab.git # SSH recommended
    cd IsaacLab
    ln -s $ISAACSIM_PATH _isaac_sim
    ./isaaclab.sh -c lab
-   ./isaaclab.sh -i none # install without additional RL libraries
+   ./isaaclab.sh -i core # core submodules (isaaclab, isaaclab_physx, ...) without RL libraries
    # reactivate the environment
    conda activate lab
    echo $PYTHONPATH 
@@ -218,36 +218,98 @@ python eval.py task=Go2/Go2Flat algo=ppo eval_render=true
 python eval_run.py --run_path ${wandb_run_path} --play # eval/visualize remote runs
 ```
 
-### FACET (Go2) in Docker
+### FACET (Go2) in Docker: how to use it
 
-The FACET paper's quadruped experiment (`projects/facet/`, task `facet/Go2Force`) can be trained without
-installing Isaac Sim on the host. `docker/` builds an image from `nvcr.io/nvidia/isaac-sim:5.1.0` with
-Isaac Lab v2.3.2 and this repository; the repo is bind-mounted, so code edits and `outputs/` persist.
-See `PLAN.md` for the step-by-step guide and troubleshooting.
+The FACET paper's quadruped experiment (`projects/facet/`, task `facet/Go2Force`) runs without
+installing Isaac Sim on the host. `docker/` builds an image from `nvcr.io/nvidia/isaac-sim:6.0.0`
+with Isaac Lab v3.0.0-beta2.patch1 and this repository. The repo is bind-mounted into the container,
+so code edits, `outputs/` and `.cache/` persist on the host. Isaac Sim 6.0 is the first release whose
+renderer starts on NVIDIA driver 595.x, so headless training, the GUI and video recording all work.
+`PLAN.md` has the step-by-step guide, the Isaac Lab 3.0 migration notes and troubleshooting.
+
+Requirements on the host: an NVIDIA GPU with a recent driver, Docker with the NVIDIA container
+toolkit (`docker info | grep -i runtimes` lists `nvidia`), about 40 GB of free disk for the image.
+Every command below is run from the `docker/` folder.
+
+#### 1. Build the image and download the scene assets (once)
 
 ```bash
 cd docker
-docker compose build                                   # ~15 GB download, 20-40 min
+docker compose build                                   # ~21 GB download, 20-40 min
 docker compose run --rm aa aa-list-tasks | grep facet  # expect facet/Go2Force
 
-# smoke test: 64 robots, no wandb
-docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_train \
-    task.num_envs=64 total_frames=200_000 wandb.mode=disabled
-# teacher (privileged) policy; wandb runs are stored offline under outputs/
-docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_train \
-    task.num_envs=1024 wandb.mode=offline
-# student (deployable) policy, initialised from the teacher checkpoint
-docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_finetune \
-    task.num_envs=1024 wandb.mode=offline checkpoint_path=outputs/<run>/wandb/offline-run-*/files/checkpoint_final.pt
-# render a video headless, or open a window with the `gui` profile (run `xhost +local:root` first)
-docker compose run --rm aa python scripts/eval.py task=facet/Go2Force algo=ppo_facet_finetune \
-    task.num_envs=16 checkpoint_path=<ckpt> eval_render=true wandb.mode=disabled
-docker compose --profile gui run --rm aa-gui python scripts/play.py task=facet/Go2Force \
-    algo=ppo_facet_finetune task.num_envs=16 checkpoint_path=<ckpt>
+# Sky HDR used by the renderer (GUI and video). Physics-only training does not need it; without it
+# the scene falls back to an untextured dome light and logs a warning.
+docker compose run --rm aa bash -c 'pip install -q "huggingface_hub[cli]" && hf download btx0424/aa-robot-models \
+    --repo-type dataset --include "scene/*" --local-dir /workspace/active_adaptation/.cache/aa-robot-models'
+
+# Optional self-check of the Isaac Lab 3.0 quaternion boundary (XYZW in Isaac Lab, WXYZ in this repo)
+docker compose run --rm aa python scripts/tools/check_isaac_quat.py task=facet/Go2Force \
+    algo=ppo_facet_train task.num_envs=4 wandb.mode=disabled
 ```
 
-An 8 GB GPU fits about 1024-2048 environments (the paper used 4096); override `task.num_envs` on the
-command line rather than editing the task file.
+#### 2. Headless: train and evaluate
+
+The `aa` service has no display and is the one to use for training. Checkpoints and offline wandb
+runs land under `outputs/<date>/<time>-Go2Force-<algo>/wandb/`.
+
+```bash
+# smoke test: 16 robots, ~1 minute, no wandb
+docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_train \
+    task.num_envs=16 total_frames=20_000 wandb.mode=disabled
+
+# teacher (privileged) policy; wandb runs are stored offline under outputs/
+docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_train \
+    task.num_envs=4096 wandb.mode=offline
+
+# student (deployable) policy, initialised from the teacher checkpoint
+docker compose run --rm aa python scripts/train_ppo.py task=facet/Go2Force algo=ppo_facet_finetune \
+    task.num_envs=4096 wandb.mode=offline \
+    checkpoint_path=/workspace/active_adaptation/outputs/<run>/wandb/latest-run/files/checkpoint_final.pt
+
+# evaluate a checkpoint (metrics only)
+docker compose run --rm aa python scripts/eval.py task=facet/Go2Force algo=ppo_facet_train \
+    task.num_envs=256 checkpoint_path=<ckpt> wandb.mode=disabled
+
+# evaluate and record a video (headless rendering); the file is written next to the package:
+# active_adaptation/recording-<date>_<time>.mp4
+docker compose run --rm aa python scripts/eval.py task=facet/Go2Force algo=ppo_facet_train \
+    task.num_envs=4 checkpoint_path=<ckpt> eval_render=true wandb.mode=disabled
+```
+
+Paths passed as `checkpoint_path` are container paths: the repo root is `/workspace/active_adaptation`.
+On an 8 GB GPU, 4096 robots use about 6.7 GB of VRAM; 2048 use about 4.7 GB. Override `task.num_envs`
+on the command line rather than editing the task file. A laptop on battery caps the GPU power and
+makes training several times slower: plug it in.
+
+#### 3. GUI: watch a policy in the Isaac Sim window
+
+The `aa-gui` service (compose profile `gui`) shares the host's X11 socket. Allow local containers to
+use the display once per login, then run `play.py` with `headless=false`; that flag selects Isaac
+Lab 3.0's Kit visualizer, which opens the Isaac Sim window. The first GUI start compiles shaders for
+3-4 minutes before the robots appear; later starts reuse the cached shaders.
+
+```bash
+xhost +local:root
+docker compose --profile gui run --rm aa-gui python scripts/play.py task=facet/Go2Force \
+    algo=ppo_facet_train task.num_envs=4 headless=false checkpoint_path=<ckpt>
+```
+
+The window shows the robots, the red setpoint spheres and the green reference-velocity arrows drawn
+by `ImpedanceCommandManager.debug_draw`. Rendering costs about 3 GB of VRAM on top of the
+simulation, so keep `task.num_envs` small and do not train at the same time. `headless=true` (the
+default of every script except `play.py`) never touches the renderer.
+
+#### 4. Stopping and cleaning up
+
+```bash
+docker ps                          # containers started with `docker compose run` are listed here
+docker stop <container name>       # stop a running training / play session
+docker compose --profile gui down  # remove the compose network and containers started with `up`
+docker volume ls | grep isaac      # shader and extension caches; safe to delete, the next start is slower
+```
+
+`docker compose down` does not stop containers started with `docker compose run`; use `docker stop`.
 
 ### VSCode/Cursor Python Debugging
 

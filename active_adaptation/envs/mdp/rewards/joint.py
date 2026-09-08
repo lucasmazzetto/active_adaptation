@@ -136,7 +136,7 @@ class joint_torque_disc(Reward):
     def update(self):
         self.applied_torque = self.asset.data.applied_torque[:, self.joint_ids]
         self.computed_torque = self.asset.data.computed_torque[:, self.joint_ids]
-        self.projected_joint_force = view_to_torch(self.asset.root_physx_view.get_dof_projected_joint_forces())[:, self.joint_ids]
+        self.projected_joint_force = view_to_torch(self.asset.root_view.get_dof_projected_joint_forces())[:, self.joint_ids]
         self.applied_torques.append(self.applied_torque)
         self.computed_torques.append(self.computed_torque)
         self.projected_joint_forces.append(self.projected_joint_force)
