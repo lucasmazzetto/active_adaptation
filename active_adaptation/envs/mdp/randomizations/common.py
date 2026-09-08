@@ -5,6 +5,13 @@ from typing import Union, Dict, Tuple, Optional
 
 import active_adaptation
 from active_adaptation.utils.math import quat_rotate, quat_rotate_inverse
+from active_adaptation.envs.mdp.utils.wrench import set_external_wrench
+from active_adaptation.envs.mdp.utils.physx_view import view_to_torch, torch_to_view, view_indices
+
+
+def _flatten_inertias(like) -> bool:
+    # Isaac Lab >= 3.0 (warp views) takes inertias flattened per instance; <= 2.3 took (N, B, 9).
+    return not isinstance(like, torch.Tensor)
 
 try:
     import isaaclab.utils.string as string_utils
@@ -86,22 +93,14 @@ def _set_external_wrench(
     torques: torch.Tensor,
     body_ids=None,
 ):
-    """Set external wrench across old/new simulator APIs."""
-    if hasattr(asset, "set_external_force_and_torque"):
-        kwargs = {}
-        if body_ids is not None:
-            kwargs["body_ids"] = body_ids
-        asset.set_external_force_and_torque(forces, torques, **kwargs)
-        return
+    """Set (replace) the external wrench on ``body_ids`` across simulator versions.
 
-    if body_ids is None:
-        asset._external_force_b[:] = forces
-        asset._external_torque_b[:] = torques
-    else:
-        asset._external_force_b[:, body_ids] = forces
-        asset._external_torque_b[:, body_ids] = torques
-    if hasattr(asset, "has_external_wrench"):
-        asset.has_external_wrench = True
+    Delegates to :mod:`active_adaptation.envs.mdp.utils.wrench`, which prefers the Isaac Lab
+    >= 2.3 wrench composer and falls back to the legacy ``_external_force_b`` buffers used by
+    Isaac Lab <= 2.2 and this repo's MuJoCo backend. Isaac Lab 3.0 removed both the legacy
+    buffers and the deprecated ``set_external_force_and_torque`` shim this function used to call.
+    """
+    set_external_wrench(asset, forces=forces, torques=torques, body_ids=body_ids)
 
 
 class motor_params(Randomization):
@@ -291,26 +290,21 @@ class perturb_body_materials(Randomization):
         if self.env.backend == "isaac":
             logging.info(f"Randomize body materials of {self.body_names} upon startup.")
 
-            materials = self.asset.root_physx_view.get_material_properties().clone()
+            view = self.asset.root_physx_view
+            raw = view.get_material_properties()
+            materials = view_to_torch(raw).clone().cpu()
             if self.homogeneous:
                 shape = (self.num_envs, 1)
             else:
                 shape = (self.num_envs, len(self.shape_ids))
             if self.static_friction_range is not None:
-                materials[:, self.shape_ids, 0] = self.static_friction_buckets[
-                    torch.randint(0, self.num_buckets, shape)
-                ]
+                materials[:, self.shape_ids, 0] = self.static_friction_buckets.cpu()[torch.randint(0, self.num_buckets, shape)]
             if self.dynamic_friction_range is not None:
-                materials[:, self.shape_ids, 1] = self.dynamic_friction_buckets[
-                    torch.randint(0, self.num_buckets, shape)
-                ]
+                materials[:, self.shape_ids, 1] = self.dynamic_friction_buckets.cpu()[torch.randint(0, self.num_buckets, shape)]
             if self.restitution_range is not None:
-                materials[:, self.shape_ids, 2] = self.restitution_buckets[
-                    torch.randint(0, self.num_buckets, shape)
-                ]
-
-            indices = torch.arange(self.asset.num_instances)
-            self.asset.root_physx_view.set_material_properties(materials.flatten(), indices)
+                materials[:, self.shape_ids, 2] = self.restitution_buckets.cpu()[torch.randint(0, self.num_buckets, shape)]
+            indices = view_indices(self.asset.num_instances, raw)
+            view.set_material_properties(torch_to_view(materials.reshape(view_to_torch(raw).shape), raw), indices)
             self.asset.data.body_materials = materials.to(self.device)
         elif self.env.backend == "mjlab":
             logging.info(f"Randomize body materials of {self.geom_names} upon startup.")
@@ -410,18 +404,25 @@ class perturb_body_mass(Randomization):
     def startup(self):
         logging.info(f"Randomize body masses of {self.body_names} upon startup.")
         if self.env.backend == "isaac":
-            masses = self.asset.data.default_mass.clone()
-            inertias = self.asset.data.default_inertia.clone()
+            # PhysX "model" properties (masses/inertias) are set on the CPU on every Isaac Lab
+            # version; getters return torch (<= 2.3) or warp (>= 3.0) arrays. Work in torch on
+            # the CPU and convert at the view boundary.
+            view = self.asset.root_physx_view
+            raw = view.get_masses()
+            masses = view_to_torch(raw).clone().cpu()
+            inertias = view_to_torch(view.get_inertias()).clone().cpu().reshape(masses.shape[0], masses.shape[1], 9)
+            body_ids = torch.as_tensor(self.body_ids, device="cpu")
+            mass_ranges = self.mass_ranges.cpu()
             scale = uniform(
-                self.mass_ranges[:, 0].expand_as(masses[:, self.body_ids]),
-                self.mass_ranges[:, 1].expand_as(masses[:, self.body_ids])
+                mass_ranges[:, 0].expand_as(masses[:, body_ids]),
+                mass_ranges[:, 1].expand_as(masses[:, body_ids]),
             ).cpu()
-            masses[:, self.body_ids] *= scale
-            inertias[:, self.body_ids] *= scale.unsqueeze(-1)
-            indices = torch.arange(self.asset.num_instances)
-            self.asset.root_physx_view.set_masses(masses, indices)
-            self.asset.root_physx_view.set_inertias(inertias, indices)
-            assert torch.allclose(self.asset.root_physx_view.get_masses(), masses)
+            masses[:, body_ids] *= scale
+            inertias[:, body_ids] *= scale.unsqueeze(-1)
+            indices = view_indices(self.asset.num_instances, raw)
+            view.set_masses(torch_to_view(masses, raw), indices)
+            view.set_inertias(torch_to_view(inertias.flatten(1) if _flatten_inertias(raw) else inertias, raw), indices)
+            assert torch.allclose(view_to_torch(view.get_masses()).cpu(), masses)
         elif self.env.backend == "mjlab":
             num_bodies = self.global_body_ids.numel()
             low = self.mass_ranges[:, 0].unsqueeze(0).expand(self.num_envs, num_bodies)
@@ -481,16 +482,20 @@ class perturb_body_com(Randomization):
     def startup(self):
         logging.info(f"Randomize body CoM of {self.body_names} upon startup.")
         if self.env.backend == "isaac":
-            coms = self.asset.root_physx_view.get_coms().clone()
+            view = self.asset.root_physx_view
+            raw = view.get_coms()
+            coms = view_to_torch(raw).clone().cpu()
+            body_ids = torch.as_tensor(self.body_ids, device="cpu")
+            pos_ranges = self.pos_ranges.cpu()
             rand_sample = uniform(
-                self.pos_ranges[:, 0].unsqueeze(0).unsqueeze(-1).expand_as(coms[:, self.body_ids, :3]),
-                self.pos_ranges[:, 1].unsqueeze(0).unsqueeze(-1).expand_as(coms[:, self.body_ids, :3])
-            )
+                pos_ranges[:, 0].unsqueeze(0).unsqueeze(-1).expand_as(coms[:, body_ids, :3]),
+                pos_ranges[:, 1].unsqueeze(0).unsqueeze(-1).expand_as(coms[:, body_ids, :3]),
+            ).cpu()
             rand_sample[:, :, 0] *= 0.5
-            coms[:, self.body_ids, :3] += rand_sample.to('cpu')
-            indices = torch.arange(self.asset.num_instances)
-            self.asset.root_physx_view.set_coms(coms, indices)
-            assert torch.allclose(self.asset.root_physx_view.get_coms(), coms)
+            coms[:, body_ids, :3] += rand_sample
+            indices = view_indices(self.asset.num_instances, raw)
+            view.set_coms(torch_to_view(coms, raw), indices)
+            assert torch.allclose(view_to_torch(view.get_coms()).cpu(), coms)
         elif self.env.backend == "mjlab":
             num_bodies = self.global_body_ids.numel()
             low = self.pos_ranges[:, 0].unsqueeze(0).unsqueeze(-1).expand(self.num_envs, num_bodies, 3)
@@ -707,7 +712,7 @@ class drag(Randomization):
         self.body_indices, self.body_names = self.asset.find_bodies(body_names)
         self.num_bodies = len(self.body_indices)
         self.drag_coeffs = sample_uniform((self.num_envs, self.num_bodies, 1), *drag_range, self.device).expand(self.num_envs, self.num_bodies, 3)
-        self.default_mass_total = self.asset.root_physx_view.get_masses()[0].sum() * 9.81
+        self.default_mass_total = view_to_torch(self.asset.root_physx_view.get_masses())[0].sum() * 9.81
 
         with torch.device(self.env.device):
             self.forces = torch.zeros(self.env.num_envs, len(self.body_indices), 3)
@@ -720,7 +725,8 @@ class drag(Randomization):
         lin_vel = self.asset.data.body_lin_vel_w[:, self.body_indices]
         drag_forces = - lin_vel * self.drag_coeffs
         self.forces = drag_forces * self.default_mass_total
-        self.asset.set_external_force_and_torque(self.forces, self.torques, body_ids=self.body_indices)
+        set_external_wrench(
+            self.asset, self.forces, self.torques, body_ids=self.body_indices)
 
     def debug_draw(self):
         self.env.debug_draw.vector(
@@ -794,7 +800,7 @@ class pull(Randomization):
         self.asset = self.env.scene.articulations["robot"]
         self.drag_prob = drag_prob
         self.drag_range = drag_range
-        self.default_mass_total = self.asset.root_physx_view.get_masses()[0].sum().to(self.device) * 9.81
+        self.default_mass_total = view_to_torch(self.asset.root_physx_view.get_masses())[0].sum().to(self.device) * 9.81
         
         with torch.device(self.device):
             self.forces = torch.zeros(self.num_envs, 3)
@@ -820,7 +826,8 @@ class pull(Randomization):
     def step(self, substep):
         force =  self.axis * self.drag_magnitude
         self.forces[:] = torch.where(self.apply_drag, force, torch.zeros_like(self.forces))
-        self.asset.set_external_force_and_torque(
+        set_external_wrench(
+            self.asset, 
             quat_rotate_inverse(self.asset.data.root_link_quat_w, self.forces).unsqueeze(1), 
             torch.zeros_like(force).unsqueeze(1), [0])
 

@@ -509,7 +509,12 @@ class MJScene:
         frame = self.spec.worldbody.add_frame()
         ground_meshes = []
 
-        for asset_name, asset_cfg in self.cfg.__dict__.items():
+        # The scene cfg is a plain class when Isaac Lab's `configclass` is unavailable (the
+        # MuJoCo backend runs without Isaac Sim), so its fields live on the class, not the
+        # instance. Collect both, instance values taking precedence.
+        cfg_items = {k: v for k, v in vars(type(self.cfg)).items() if not k.startswith("_")}
+        cfg_items.update({k: v for k, v in vars(self.cfg).items() if not k.startswith("_")})
+        for asset_name, asset_cfg in cfg_items.items():
             if isinstance(asset_cfg, MJArticulationCfg):
                 articulation = MJArticulation(asset_cfg)
                 self.articulations[asset_name] = articulation

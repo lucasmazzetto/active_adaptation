@@ -350,7 +350,8 @@ class PositionVelocityTracking(Command):
         
         if self.env.sim.has_gui():
             if self.env.backend == "isaac":
-                from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg, sim_utils
+                from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+                import isaaclab.sim as sim_utils
                 self.marker = VisualizationMarkers(
                     VisualizationMarkersCfg(
                         prim_path=f"/Visuals/Command/ref_pos_w",

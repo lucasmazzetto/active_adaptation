@@ -908,6 +908,50 @@ docker compose run --rm aa python scripts/play.py task=facet/Go2Force algo=ppo_f
 
 ---
 
+## 6d. (added during implementation) Why the GUI crashed, the Isaac Sim 6.0 experiment, and the decision
+
+### What was wrong
+Isaac Sim 5.1's RTX renderer crashes on start-up on this machine (driver 595.84), headless or
+not, with the **stock** `nvcr.io/nvidia/isaac-sim:5.1.0` image too, so it is not our setup.
+Isaac Sim 5.1 predates the 595 driver series. Physics-only training never touches the
+renderer, which is why headless training works. Vulkan presentation on this hybrid-graphics
+laptop (displays on the Radeon iGPU, rendering on the RTX 3070 Ti) additionally needed Mesa's
+`radeon` ICD inside the container; that is fixed in the Dockerfile and is necessary but not
+sufficient.
+
+### The 6.0 experiment (kept, parametrized, not the default)
+The stock `isaac-sim:6.0.0` image's RTX renderer **does** start on this driver. Isaac Sim 6.0
+pairs with Isaac Lab 3.0 (`v3.0.0-beta2.patch1`), so the Dockerfile/compose take
+`ISAACSIM_VERSION` / `ISAACLAB_TAG` build args; the 6.0 image builds and this repo reaches the
+first environment reset on it after these backward-compatible edits (all on this branch):
+
+* `SimulationCfg(physics=PhysxCfg)` from `isaaclab_physx.physics` (3.0) vs `physx=` (2.x)
+* `SimulationContext` stage handling without `attach_stage_to_usd_context` / `get_initial_stage`
+* `has_gui` property vs method; `clear_all_callbacks` guard
+* `import isaaclab.sim as sim_utils` instead of the re-export through `isaaclab.markers`
+* `isaacsim.core.utils` (moved to `extsDeprecated` in 6.0): local `set_seed` fallback, stage lookup fallback
+* PhysX view getters return warp arrays and setters want CPU `float32`/`int32` warp arrays
+  (`envs/mdp/utils/physx_view.py`); mass / material / CoM randomizers routed through it
+* `asset.data.*` are warp-backed `ProxyArray`s: `.torch` before `wp.from_torch`
+
+**Blocker:** Isaac Lab 3.0 changed the quaternion convention from **WXYZ to XYZW** (its
+migration guide, "Quaternion Format"). This codebase's math (`utils/math.py`) and its ~24
+quaternion reads from asset data plus the reset/marker writes are all WXYZ. Nothing would
+crash; orientations would be silently wrong and training would proceed on garbage. Migrating
+means a conversion boundary in the Isaac backend and a correctness check against the 5.1
+setup. Deferred.
+
+### Decision (2026-09-08)
+Train on the verified Isaac Sim 5.1 + Isaac Lab 2.3.2 image (the compose default). For seeing
+the robot, use the repo's MuJoCo backend (`backend=mujoco`), which renders with OpenGL and
+never touches the RTX renderer; `mjlab` is installed in the image for it. Fixes needed on that
+path: the isaaclab-to-mjlab import guards catch `ImportError` (they caught only
+`ModuleNotFoundError`, which the real failure is not), the legacy `impedance.py` no longer
+imports Isaac Lab, marker calls are guarded, and `MJScene` reads scene-config fields from the
+class as well as the instance (the `configclass` stub leaves them on the class).
+
+---
+
 ## 11. Known issues left out of scope (do not fix now, just know they exist)
 
 - `ppo_dic.py` (`algo=ppo_dic_*`) still lacks the `env` constructor argument the factory passes; unused by this plan.

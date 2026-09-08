@@ -25,9 +25,8 @@ class Marker(Action):
             from isaaclab.markers import (
                 VisualizationMarkers,
                 VisualizationMarkersCfg,
-                sim_utils,
             )
-
+            import isaaclab.sim as sim_utils  # not re-exported by isaaclab.markers on Isaac Lab >= 3.0
             self.marker = VisualizationMarkers(
                 VisualizationMarkersCfg(
                     prim_path="/Visuals/Input/Marker",

@@ -23,7 +23,12 @@ from active_adaptation.registry import RegistryMixin
 from active_adaptation.utils.profiling import ScopedTimer
 
 if active_adaptation.get_backend() == "isaac":
-    import isaacsim.core.utils.torch as torch_utils
+    try:
+        import isaacsim.core.utils.torch as torch_utils
+    except ImportError:
+        # Isaac Sim 6.0 moved isaacsim.core.utils to extsDeprecated, where it is not importable
+        # by default. The only thing we used from it is set_seed; see _set_seed for the fallback.
+        torch_utils = None
 
 
 EMA_DECAY = 0.99
@@ -592,7 +597,15 @@ class _EnvBase(EnvBase, RegistryMixin):
                 rep.set_global_seed(seed)
             except ModuleNotFoundError:
                 pass
-            return torch_utils.set_seed(seed)
+            if torch_utils is not None:
+                return torch_utils.set_seed(seed)
+            # Same effect as isaacsim.core.utils.torch.set_seed (random, numpy, torch, CUDA).
+            import random
+            random.seed(seed)
+            np.random.seed(seed)
+            torch.manual_seed(seed)
+            torch.cuda.manual_seed_all(seed)
+            return seed
         if self.backend == "mujoco":
             torch.manual_seed(seed)
             np.random.seed(seed)
@@ -629,7 +642,7 @@ class _EnvBase(EnvBase, RegistryMixin):
         if not self.is_closed:
             if self.backend == "isaac":
                 del self.scene
-                self.sim.clear_all_callbacks()
+                getattr(self.sim, "clear_all_callbacks", lambda: None)()
                 self.sim.clear_instance()
             elif self.backend == "mjlab" and self.sim.has_gui():
                 self.sim.viewer.close()

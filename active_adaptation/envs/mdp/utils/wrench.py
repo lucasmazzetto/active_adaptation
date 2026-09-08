@@ -73,6 +73,40 @@ def add_external_wrench(
         asset.has_external_wrench = True
 
 
+def set_external_wrench(
+    asset,
+    forces: torch.Tensor | None = None,
+    torques: torch.Tensor | None = None,
+    body_ids=None,
+    positions: torch.Tensor | None = None,
+    is_global: bool = False,
+) -> None:
+    """Replace (rather than accumulate) the external wrench on the given bodies.
+
+    Same arguments and version handling as :func:`add_external_wrench`.
+    """
+    composer = _composer(asset)
+    if composer is not None:
+        composer.set_forces_and_torques(
+            forces=forces,
+            torques=torques,
+            positions=positions,
+            body_ids=body_ids,
+            is_global=is_global,
+        )
+        return
+
+    if is_global or positions is not None:
+        raise NotImplementedError("is_global/positions require the wrench composer API (Isaac Lab >= 2.3).")
+    index = slice(None) if body_ids is None else body_ids
+    if forces is not None:
+        asset._external_force_b[:, index] = forces
+    if torques is not None:
+        asset._external_torque_b[:, index] = torques
+    if hasattr(asset, "has_external_wrench"):
+        asset.has_external_wrench = True
+
+
 def get_external_force_b(asset) -> torch.Tensor:
     """Currently applied external force per body, in the link frame. ``(num_envs, num_bodies, 3)``."""
     composer = _composer(asset)
@@ -89,4 +123,4 @@ def get_external_torque_b(asset) -> torch.Tensor:
     return asset._external_torque_b
 
 
-__all__ = ["add_external_wrench", "get_external_force_b", "get_external_torque_b"]
+__all__ = ["add_external_wrench", "set_external_wrench", "get_external_force_b", "get_external_torque_b"]

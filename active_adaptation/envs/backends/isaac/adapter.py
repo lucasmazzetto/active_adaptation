@@ -18,7 +18,8 @@ class IsaacSimAdapter(SimAdapter):
         return self._sim.get_physics_dt()
 
     def has_gui(self) -> bool:
-        return self._sim.has_gui()
+        has_gui = self._sim.has_gui  # method on Isaac Lab 2.3, property on >= 3.0
+        return bool(has_gui()) if callable(has_gui) else bool(has_gui)
 
     def step(self, render: bool = False) -> None:
         self._sim.step(render=render)

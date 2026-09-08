@@ -166,8 +166,8 @@ class Impedance(Command):
             from isaaclab.markers.config import (
                 BLUE_ARROW_X_MARKER_CFG,
                 RED_ARROW_X_MARKER_CFG,
-                sim_utils
             )
+            import isaaclab.sim as sim_utils
             from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
             print(BLUE_ARROW_X_MARKER_CFG.markers["arrow"].scale)
 

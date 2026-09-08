@@ -1,3 +1,4 @@
+from active_adaptation.envs.mdp.utils.physx_view import view_to_torch
 import torch
 
 from typing import TYPE_CHECKING
@@ -360,9 +361,9 @@ class angular_momentum(Reward):
     def __init__(self, env, weight: float):
         super().__init__(env, weight)
         self.asset: Articulation = self.env.scene.articulations["robot"]
-        self.body_mass = self.asset.root_physx_view.get_masses().to(self.device).reshape(self.num_envs, -1, 1)
-        self.body_inertia = self.asset.root_physx_view.get_inertias().to(self.device).reshape(self.num_envs, -1, 3, 3)
-        self.com_offset = self.asset.root_physx_view.get_coms()[:, :, :3].to(self.device)
+        self.body_mass = view_to_torch(self.asset.root_physx_view.get_masses()).to(self.device).reshape(self.num_envs, -1, 1)
+        self.body_inertia = view_to_torch(self.asset.root_physx_view.get_inertias()).to(self.device).reshape(self.num_envs, -1, 3, 3)
+        self.com_offset = view_to_torch(self.asset.root_physx_view.get_coms())[:, :, :3].to(self.device)
         self.body_mass_weight = self.body_mass / self.body_mass.sum(1, keepdim=True)
 
     def update(self):

@@ -32,11 +32,16 @@ class IsaacBackendEnv(_EnvBase):
 
     def setup_scene(self):
         import isaaclab.sim as sim_utils
-        from isaaclab.sim import (
-            SimulationContext,
-            attach_stage_to_usd_context,
-            use_stage,
-        )
+        import contextlib
+        from isaaclab.sim import SimulationContext, use_stage
+        try:
+            # Isaac Lab 2.3: the scene is built on an in-memory stage that must then be attached
+            # to Kit's USD context by hand.
+            from isaaclab.sim import attach_stage_to_usd_context
+        except ImportError:
+            # Isaac Lab >= 3.0: SimulationContext creates its stage, makes it the thread-local
+            # current stage and attaches it to the USD context itself.
+            attach_stage_to_usd_context = None
         from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
         from isaaclab.assets import AssetBaseCfg
         from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
@@ -93,10 +98,16 @@ class IsaacBackendEnv(_EnvBase):
         )
 
         sim = SimulationContext.instance() or SimulationContext(sim_cfg)
-        with use_stage(sim.get_initial_stage()):
+        if hasattr(sim, "get_initial_stage"):        # Isaac Lab 2.3
+            stage = sim.get_initial_stage()
+        else:                                        # Isaac Lab >= 3.0
+            stage = getattr(sim, "stage", None)
+        stage_ctx = (lambda: use_stage(stage)) if stage is not None else contextlib.nullcontext
+        with stage_ctx():
             self.scene = InteractiveScene(scene_cfg)
-            attach_stage_to_usd_context()
-        with use_stage(sim.get_initial_stage()):
+            if attach_stage_to_usd_context is not None:
+                attach_stage_to_usd_context()
+        with stage_ctx():
             sim.reset()
 
         sim.set_camera_view(eye=self.cfg.viewer.eye, target=self.cfg.viewer.lookat)

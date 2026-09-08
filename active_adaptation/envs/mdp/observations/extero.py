@@ -18,7 +18,8 @@ if active_adaptation.get_backend() == "isaac":
     from isaaclab.terrains.trimesh.utils import make_plane
     from isaaclab.utils.warp import convert_to_warp_mesh, raycast_mesh
     from pxr import UsdGeom, UsdPhysics
-    from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg, sim_utils
+    from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+    import isaaclab.sim as sim_utils  # not re-exported by isaaclab.markers on Isaac Lab >= 3.0
 
 
 MESHES = {}
@@ -166,7 +167,10 @@ class height_scan(Observation):
         
         if targets is not None:
             if self.env.backend == "isaac":
-                from isaacsim.core.utils.stage import get_current_stage
+                try:
+                    from isaacsim.core.utils.stage import get_current_stage  # Isaac Sim <= 5.x
+                except ImportError:
+                    from isaacsim.core.experimental.utils.stage import get_current_stage  # Isaac Sim >= 6.0
                 stage = get_current_stage()
                 for target in targets:
                     target_asset = self.env.scene[target]

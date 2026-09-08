@@ -28,8 +28,14 @@ if active_adaptation.get_backend() == "isaac":
         FRAME_MARKER_CFG,
         VisualizationMarkers,
         VisualizationMarkersCfg,
-        sim_utils
     )
+    import isaaclab.sim as sim_utils
+def _as_torch(x) -> torch.Tensor:
+    """Isaac Lab >= 3.0 exposes asset data as warp-backed ProxyArrays with a `.torch` view;
+    <= 2.3 hands out plain tensors. warp.from_torch needs the real tensor."""
+    if isinstance(x, torch.Tensor):
+        return x
+    return x.torch if hasattr(x, "torch") else torch.as_tensor(x)
 
 
 def saturate(x: torch.Tensor, a: float):
@@ -420,7 +426,7 @@ class ImpedanceCommandManager(Command):
             dim=[self.num_envs],
             inputs=[
                 wp.from_torch(mask, dtype=wp.bool, return_ctype=True),
-                wp.from_torch(self.asset.data.root_link_pos_w, dtype=wp.vec3, return_ctype=True),
+                wp.from_torch(_as_torch(self.asset.data.root_link_pos_w), dtype=wp.vec3, return_ctype=True),
                 wp.from_torch(self.root_link_rpy_w, dtype=wp.vec3, return_ctype=True),
                 self.seed,
             ],
@@ -445,7 +451,7 @@ class ImpedanceCommandManager(Command):
             dim=[self.num_envs],
             inputs=[
                 wp.from_torch(mask, dtype=wp.bool, return_ctype=True),
-                wp.from_torch(root_link_pos, dtype=wp.vec3, return_ctype=True),
+                wp.from_torch(_as_torch(root_link_pos), dtype=wp.vec3, return_ctype=True),
                 wp.from_torch(self.root_link_rpy_w, dtype=wp.vec3, return_ctype=True),
                 self.seed,
             ],

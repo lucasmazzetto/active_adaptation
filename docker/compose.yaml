@@ -3,7 +3,14 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    image: active-adaptation-isaac:5.1.0
+      args:
+        ISAACSIM_VERSION: ${ISAACSIM_VERSION:-5.1.0}
+        ISAACLAB_TAG: ${ISAACLAB_TAG:-v2.3.2}
+    # Default: Isaac Sim 5.1 + Isaac Lab 2.3.2, the verified training pairing (headless only on
+    # driver 595.x; use backend=mujoco for a viewer). The Isaac Sim 6.0 + Isaac Lab 3.0 pairing builds
+    # with ISAACSIM_VERSION=6.0.0 ISAACLAB_TAG=v3.0.0-beta2.patch1 but is NOT training-ready: Isaac Lab
+    # 3.0 switched quaternions to XYZW while this codebase is WXYZ (see PLAN.md).
+    image: active-adaptation-isaac:${ISAACSIM_VERSION:-5.1.0}
     runtime: nvidia
     deploy:
       resources:
