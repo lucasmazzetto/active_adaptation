@@ -6,7 +6,7 @@ Every topic is split into small tasks. Do them in order. Each task says **what t
 the repository root (`/mnt/Shared/Projects/active_adaptation`) unless stated otherwise.
 
 > Task 0: when this plan is approved, save this exact document as `PLAN.md` in the
-> repository root and commit it on a new branch (`git checkout -b fix/facet-go2-docker`).
+> repository root and commit it on a new branch (`git checkout -b feat/isaac-sim-6.0-isaac-lab-3.0`).
 
 ---
 
@@ -1076,7 +1076,7 @@ pipeline. Real training is Task 9.3.
 
 ## 12. Definition of done (checklist)
 
-- [ ] `PLAN.md` committed on branch `fix/facet-go2-docker`
+- [ ] `PLAN.md` committed on branch `feat/isaac-sim-6.0-isaac-lab-3.0`
 - [ ] `docker/` contains Dockerfile, compose.yaml, entrypoint.sh, isaac_env.sh, make_constraints.py, .env.example; `docker/.env` gitignored
 - [ ] `docker compose build` succeeds; torch reports CUDA available inside the container
 - [ ] `aa-list-tasks` prints `facet/Go2Force`
