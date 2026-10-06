@@ -199,7 +199,8 @@ class PPOPolicy(PPOBase):
                 in_keys=["loc", "scale"],
                 out_keys=[ACTION_KEY],
                 distribution_class=IndependentNormal,
-                return_log_prob=True
+                return_log_prob=True,
+                log_prob_key="action_log_prob",
             ).to(self.device)
         
         teacher_in_keys = ["_obs_normed", "_priv_feature", "ext_feature"]
@@ -275,8 +276,10 @@ class PPOPolicy(PPOBase):
         spec = Unbounded((num_envs, 128), device=self.device)
         return TensorDictPrimer({"adapt_hx": spec}, reset_key="done", expand_specs=False)
 
-    def get_rollout_policy(self, mode: str="train"):
+    def get_rollout_policy(self, mode: str="train", critic: bool = False):
         modules = [self.vecnorm]
+        if critic:
+            modules.append(self.critic)
         
         if self.cfg.phase == "train":
             modules.append(self.encoder_priv)
@@ -292,6 +295,10 @@ class PPOPolicy(PPOBase):
         
         policy = Seq(*modules)
         return policy
+
+    def compute_value(self, tensordict):
+        self.vecnorm(tensordict)
+        return self.critic(tensordict)
 
     @VecNorm.freeze()
     def train_op(self, tensordict: TensorDict):
@@ -387,13 +394,13 @@ class PPOPolicy(PPOBase):
             actor = self.actor_teacher
             opt = self.opt_teacher
             self.encoder_priv(tensordict)
-            self.actor_teacher(tensordict)
         elif self.cfg.phase == "finetune":
             actor = self.actor_student
             opt = self.opt_finetune
-            self.actor_student(tensordict)
 
-        dist = IndependentNormal(tensordict["loc"], tensordict["scale"])
+        # Evaluate the recorded action without sampling again or overwriting
+        # the rollout log probability used by PPO's importance ratio.
+        dist = actor.get_dist(tensordict)
         log_probs = dist.log_prob(action)
         entropy = (dist.entropy().reshape_as(valid) * valid).sum() / valid_cnt
 
@@ -445,9 +452,9 @@ class PPOPolicy(PPOBase):
     
     def load_state_dict(self, state_dict, strict=True):
         failed_keys = super().load_state_dict(state_dict, strict)
-        if state_dict.get("last_phase", "train") == "train":
+        if state_dict.get("last_phase", "train") == "train" and self.cfg.phase != "train":
             # only copy to initialize the actor once
-            hard_copy_(self.actor, self.actor_adapt)
+            hard_copy_(self.actor_teacher, self.actor_student)
         return failed_keys
 
 

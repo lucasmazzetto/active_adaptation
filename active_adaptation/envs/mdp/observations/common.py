@@ -76,27 +76,33 @@ class command(Observation):
         return self.command_manager.symmetry_transform()
 
 
-# class command_hidden(Observation):
-#     def __init__(self, env):
-#         super().__init__(env)
-#         self.command_manager = self.env.command_manager
-    
-#     @override
-#     def compute(self):
-#         return self.command_manager.command_hidden
-    
-#     @override
-#     def symmetry_transform(self):
-#         transform = sym_utils.SymmetryTransform(
-#             perm=torch.arange(3), 
-#             signs=[1, -1, 1]
-#         )
-#         return sym_utils.SymmetryTransform.cat([
-#             transform.repeat(3),
-#             transform.repeat(3),
-#             sym_utils.SymmetryTransform(torch.arange(3), torch.tensor([-1, -1, -1])),
-#             sym_utils.SymmetryTransform(torch.arange(3), torch.tensor([-1, -1, -1])),
-#         ])
+class command_hidden(Observation):
+    def __init__(self, env):
+        super().__init__(env)
+        self.command_manager = self.env.command_manager
+
+    @override
+    def compute(self):
+        return self.command_manager.command_hidden
+
+    @override
+    def symmetry_transform(self):
+        vector = sym_utils.SymmetryTransform(
+            perm=torch.arange(3), signs=[1, -1, 1]
+        )
+        angular = sym_utils.SymmetryTransform(
+            perm=torch.arange(3), signs=[-1, 1, -1]
+        )
+        steps = len(self.command_manager.ref_steps)
+        transforms = [
+            vector.repeat(steps),
+            vector.repeat(steps),
+            angular.repeat(steps),
+            angular.repeat(steps),
+        ]
+        if self.command_manager.has_eef:
+            transforms.extend([vector.repeat(steps), vector.repeat(steps)])
+        return sym_utils.SymmetryTransform.cat(transforms)
 
 
 class root_angvel_b(Observation):

@@ -84,17 +84,10 @@ def make_point_marker(name: str, color: Tuple[float, float, float]):
     return marker
 
 def make_frame_marker(name: str):
-    marker = VisualizationMarkers(
-        VisualizationMarkersCfg(
-            prim_path=f"/Visuals/Command/{name}",
-            markers={
-                name: sim_utils.UsdFileCfg(
-                    usd_path=f"/home/btx0424/lab50/frame_prim.usd",
-                    scale=(0.1, 0.1, 0.1),
-                ),
-            }
-        )
-    )
+    cfg = FRAME_MARKER_CFG.copy()
+    cfg.prim_path = f"/Visuals/Command/{name}"
+    cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+    marker = VisualizationMarkers(cfg)
     marker.set_visibility(True)
     return marker
 
@@ -379,17 +372,19 @@ class ImpedanceCommandManager(Command):
             raise ValueError(f"Invalid input dimension: {x.ndim}")
         return quat_rotate(quat, x)
 
-    def step(self, substep: int):
+    def pre_step(self, substep: int):
         # self.asset._external_force_b[:, self.eef_body_id] += quat_rotate_inverse(
         #     self.asset.data.body_quat_w[:, self.eef_body_id],
         #     self.get_eef_force(self.asset.data.body_pos_w[:, self.eef_body_id], self.asset.data.body_lin_vel_w[:, self.eef_body_id])
         # )
         force_base_w = self.force_impulse.get_force(None, None)
-        self.asset._external_force_b[:, 0] += quat_rotate_inverse(
+        forces = quat_rotate_inverse(
             self.asset.data.root_link_quat_w,
             force_base_w
+        ).unsqueeze(1)
+        self.asset.permanent_wrench_composer.add_forces_and_torques(
+            forces=forces, body_ids=[0]
         )
-        self.asset.has_external_wrench = True
 
     def reset(self, env_ids: torch.Tensor):
         root_link_pos = self.asset.data.root_link_pos_w[env_ids]

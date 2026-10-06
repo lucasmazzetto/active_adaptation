@@ -25,6 +25,15 @@ Plugins.instance().register(ActiveAdaptationSearchPathPlugin)
 _BACKEND = None
 _BACKEND_SET = False
 _CALLED_AT = None
+_APP_LAUNCHER = None
+
+
+def close_simulation_app():
+    """Release the Isaac application once, including after a startup failure."""
+    global _APP_LAUNCHER
+    launcher, _APP_LAUNCHER = _APP_LAUNCHER, None
+    if launcher is not None:
+        launcher.app.close(wait_for_replicator=False)
 
 _LOCAL_RANK = int(os.getenv("LOCAL_RANK", "0"))
 _WORLD_SIZE = int(os.getenv("WORLD_SIZE", "1"))
@@ -104,6 +113,7 @@ def init(cfg: DictConfig, auto_rank: bool):
         auto_rank: Whether to automatically modify `cfg.device` according to the local rank.
     """
 
+    global _APP_LAUNCHER
     wp.init()
 
     # Store sys.argv to a local file
@@ -140,7 +150,7 @@ def init(cfg: DictConfig, auto_rank: bool):
         from isaaclab.app import AppLauncher
 
         app_config = OmegaConf.to_container(cfg.app)
-        AppLauncher(app_config, distributed=is_distributed(), device=cfg.device)
+        _APP_LAUNCHER = AppLauncher(app_config, distributed=is_distributed(), device=cfg.device)
 
     import_environment_projects()
 

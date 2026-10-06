@@ -150,7 +150,8 @@ class PPOPolicy(PPOBase):
             in_keys=["loc", "scale"],
             out_keys=[ACTION_KEY],
             distribution_class=IndependentNormal,
-            return_log_prob=True
+            return_log_prob=True,
+            log_prob_key="action_log_prob",
         ).to(self.device)
 
         self.vecnorm(fake_input)

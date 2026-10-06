@@ -232,22 +232,17 @@ class joint_pos_target(joint_observation):
         return joint_pos_target[:, self.output_indexing].reshape(self.num_envs, -1)
 
 
-# class applied_torque(joint_observation):
-    
-#     supported_backends = ("isaac",)
+class applied_torque(joint_observation):
+    supported_backends = ("isaac",)
 
-#     def __init__(self, env, joint_names: str=".*", output_order: Literal["isaac", "mujoco", "mjlab"] = "isaac"):
-#         super().__init__(env, joint_names, output_order=output_order)
-#         self.asset: Articulation = self.env.scene.articulations["robot"]
-#         self.joint_ids, self.joint_names = self.asset.find_joints(joint_names)
-#         self.joint_ids = torch.tensor(self.joint_ids, device=self.device)
-    
-#     @override
-#     def compute(self) -> torch.Tensor:
-#         applied_efforts = self.asset.data.applied_torque
-#         return applied_efforts[:, self.joint_ids]
-    
-#     @override
-#     def symmetry_transform(self):
-#         transform = joint_space_symmetry(self.asset, self.joint_names)
-#         return transform
+    def __init__(self, env, joint_names: str = ".*", output_order: Literal["isaac", "mujoco", "mjlab"] = "isaac"):
+        super().__init__(env, joint_names, output_order)
+
+    @override
+    def compute(self) -> torch.Tensor:
+        efforts = self.asset.data.applied_torque[:, self.joint_ids]
+        return efforts[:, self.output_indexing]
+
+    @override
+    def symmetry_transform(self):
+        return joint_space_symmetry(self.asset, self.output_joint_names)

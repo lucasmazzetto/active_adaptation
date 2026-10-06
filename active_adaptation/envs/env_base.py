@@ -580,6 +580,7 @@ class _EnvBase(EnvBase, RegistryMixin):
         if not enabled:
             return NullVideoRecorder()
         if self.backend == "isaac":
+            self._setup_rgb_rendering()
             return IsaacVideoRecorder(self, path, enabled=True)
         # Other backends: return a no-op recorder by default.
         return NullVideoRecorder()
@@ -603,6 +604,8 @@ class _EnvBase(EnvBase, RegistryMixin):
         if mode == "human":
             return None
         if mode == "rgb_array":
+            if self.backend == "isaac":
+                self._setup_rgb_rendering()
             if hasattr(self, "_rgb_annotator"):
                 rgb_data = self._rgb_annotator.get_data()
                 rgb_data = np.frombuffer(rgb_data, dtype=np.uint8).reshape(
@@ -628,10 +631,10 @@ class _EnvBase(EnvBase, RegistryMixin):
     def close(self, *, raise_if_closed: bool = True):
         if not self.is_closed:
             if self.backend == "isaac":
+                self.sim.stop()
                 del self.scene
                 self.sim.clear_all_callbacks()
                 self.sim.clear_instance()
             elif self.backend == "mjlab" and self.sim.has_gui():
                 self.sim.viewer.close()
             super().close(raise_if_closed=raise_if_closed)
-

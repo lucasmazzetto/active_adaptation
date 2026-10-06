@@ -58,7 +58,12 @@ class ScopedTimer(_DecoratorContextManager):
         # Re-parent if needed so the summary tree reflects current usage.
         if self.parent is not parent:
             if self.parent is not None:
-                raise ValueError(f"Timer {self.name} already has a parent {self.parent.name}")
+                previous_children = (
+                    ScopedTimer._root_nodes
+                    if self.parent == "root"
+                    else self.parent.children
+                )
+                previous_children.remove(self)
             # Attach to new parent or root list.
             self.parent = parent
             if parent == "root":
@@ -112,4 +117,3 @@ class ScopedTimer(_DecoratorContextManager):
 
         for child in node.children:
             self.print_recursive(child, depth + 1, clear=clear, max_depth=max_depth, total_time=total_time)
-

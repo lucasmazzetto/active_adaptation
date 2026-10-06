@@ -5,6 +5,9 @@ import wandb
 import logging
 import time
 import datetime
+import os
+import sys
+import threading
 from pathlib import Path
 
 from omegaconf import OmegaConf, DictConfig
@@ -32,6 +35,43 @@ CONFIG_PATH = FILE_PATH.parent / "cfg"
 
 @hydra.main(config_path=str(CONFIG_PATH), config_name="train", version_base=None)
 def main(cfg: DictConfig):
+    resources = {}
+    exit_code = 0
+    try:
+        _train(cfg, resources)
+    except BaseException as error:
+        exit_code = 130 if isinstance(error, KeyboardInterrupt) else 1
+        logging.exception("Training failed")
+        raise
+    finally:
+        # Native Kit shutdown can stall while closing the USD stage. Bound the
+        # cleanup of this training process so a failed run cannot retain VRAM.
+        def stop_stalled_shutdown():
+            print("Simulation shutdown exceeded 15 seconds; exiting this training process.", file=sys.stderr, flush=True)
+            sys.stdout.flush()
+            os._exit(exit_code)
+
+        shutdown_timer = threading.Timer(15, stop_stalled_shutdown)
+        shutdown_timer.daemon = True
+        shutdown_timer.start()
+        try:
+            try:
+                env = resources.get("env")
+                if env is not None:
+                    env.close()
+            finally:
+                try:
+                    wandb.finish()
+                finally:
+                    aa.close_simulation_app()
+        except BaseException:
+            exit_code = 1
+            raise
+        finally:
+            shutdown_timer.cancel()
+
+
+def _train(cfg: DictConfig, resources):
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
 
@@ -42,7 +82,11 @@ def main(cfg: DictConfig):
     )
 
     if aa.is_main_process():
+        default_run_name = (
+            f"{cfg.exp_name}-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')}"
+        )
         run = wandb.init(
+            name=cfg.wandb.name or default_run_name,
             job_type=cfg.wandb.job_type,
             project=cfg.wandb.project,
             mode=cfg.wandb.mode,
@@ -50,12 +94,6 @@ def main(cfg: DictConfig):
         )
         run.config.update(OmegaConf.to_container(cfg))
         run.config["world_size"] = aa.get_world_size()
-
-        default_run_name = (
-            f"{cfg.exp_name}-{datetime.datetime.now().strftime('%Y-%m-%d-%H-%M')}"
-        )
-        run_idx = run.name.split("-")[-1]
-        run.name = f"{run_idx}-{default_run_name}"
         setproctitle(run.name)
 
         run_dir = Path(run.dir)
@@ -69,6 +107,7 @@ def main(cfg: DictConfig):
     from active_adaptation.utils.helpers import EpisodeStats
 
     env, policy = make_env_policy(cfg)
+    resources["env"] = env
     policy: PPOBase
 
     frames_per_batch = env.num_envs * cfg.algo.train_every
@@ -236,7 +275,6 @@ def main(cfg: DictConfig):
         run.log(info)
         wandb.finish()
         print(f"Final checkpoint: {ckpt_path}")
-    exit(0)
 
 
 if __name__ == "__main__":

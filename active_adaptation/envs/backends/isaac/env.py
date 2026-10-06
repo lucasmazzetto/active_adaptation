@@ -39,7 +39,6 @@ class IsaacBackendEnv(_EnvBase):
         )
         from isaaclab.scene import InteractiveScene, InteractiveSceneCfg
         from isaaclab.assets import AssetBaseCfg
-        from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
         registry = Registry.instance()
         scene_cfg = InteractiveSceneCfg(
@@ -47,13 +46,12 @@ class IsaacBackendEnv(_EnvBase):
             env_spacing=2.5,
             replicate_physics=True,
         )
+        sky_texture = ROBOT_MODEL_DIR / "scene" / "kloofendal_43d_clear_puresky_4k.hdr"
         scene_cfg.sky_light = AssetBaseCfg(
             prim_path="/World/skyLight",
             spawn=sim_utils.DomeLightCfg(
                 intensity=750.0,
-                texture_file=str(
-                    ROBOT_MODEL_DIR / "scene" / "kloofendal_43d_clear_puresky_4k.hdr"
-                ),
+                texture_file=str(sky_texture) if sky_texture.is_file() and sky_texture.stat().st_size else "",
             ),
         )
 
@@ -76,10 +74,24 @@ class IsaacBackendEnv(_EnvBase):
             obj_cfg.prim_path = "{ENV_REGEX_NS}/" + obj.name
             setattr(scene_cfg, obj.name, obj_cfg)
 
+        # The defaults reserve buffers for large training batches. Keep previews
+        # small enough to share an 8 GiB GPU with the viewport.
+        physx_options = {}
+        if self.cfg.num_envs <= 4:
+            physx_options.update(
+                gpu_found_lost_pairs_capacity=262144,
+                gpu_found_lost_aggregate_pairs_capacity=262144,
+                gpu_total_aggregate_pairs_capacity=262144,
+                gpu_heap_capacity=16777216,
+                gpu_temp_buffer_capacity=4194304,
+                gpu_collision_stack_size=16777216,
+                gpu_max_num_partitions=4,
+            )
+        physx_options.update(dict(self.cfg.sim.get("physx", {})))
         sim_cfg = sim_utils.SimulationCfg(
             dt=self.cfg.sim.isaac_physics_dt,
             render=sim_utils.RenderCfg(rendering_mode="balanced"),
-            physx=sim_utils.PhysxCfg(**self.cfg.sim.get("physx", {})),
+            physx=sim_utils.PhysxCfg(**physx_options),
             device=str(self.device),
         )
 
@@ -91,22 +103,22 @@ class IsaacBackendEnv(_EnvBase):
             sim.reset()
 
         sim.set_camera_view(eye=self.cfg.viewer.eye, target=self.cfg.viewer.lookat)
-        try:
-            import omni.replicator.core as rep
-
-            self._render_product = rep.create.render_product(
-                "/OmniverseKit_Persp", tuple(self.cfg.viewer.resolution)
-            )
-            self._rgb_annotator = rep.AnnotatorRegistry.get_annotator(
-                "rgb", device="cpu"
-            )
-            self._rgb_annotator.attach([self._render_product])
-        except ModuleNotFoundError:
-            print("Set enable_cameras=true to use cameras.")
-
         self.sim = IsaacSimAdapter(sim)
         self.scene = IsaacSceneAdapter(self.scene)
         self.terrain_type = self.scene.terrain.cfg.terrain_type
+
+
+    def _setup_rgb_rendering(self):
+        """Allocate a capture product only when video/RGB output is requested."""
+        if hasattr(self, "_rgb_annotator"):
+            return
+        import omni.replicator.core as rep
+
+        self._render_product = rep.create.render_product(
+            "/OmniverseKit_Persp", tuple(self.cfg.viewer.resolution)
+        )
+        self._rgb_annotator = rep.AnnotatorRegistry.get_annotator("rgb", device="cpu")
+        self._rgb_annotator.attach([self._render_product])
 
 
 __all__ = ["IsaacBackendEnv"]

@@ -82,8 +82,8 @@ class external_forces(Observation):
         self.denom = default_mass_total if divide_by_mass else torch.tensor(scale, device=self.device)
 
     def update(self):
-        forces_b = self.asset._external_force_b[:, self.body_ids]
-        forces_b /= self.denom
+        forces_b = self.asset.permanent_wrench_composer.composed_force_as_torch[:, self.body_ids]
+        forces_b = forces_b / self.denom
         self.forces_b = forces_b
 
     def compute(self) -> torch.Tensor:
@@ -105,7 +105,7 @@ class external_torques(Observation):
         self.denom = default_inertia if divide_by_mass else torch.tensor(scale, device=self.device)
     
     def update(self):
-        torques_b = self.asset._external_torque_b[:, self.body_ids]
+        torques_b = self.asset.permanent_wrench_composer.composed_torque_as_torch[:, self.body_ids]
         torques_b = torques_b / self.denom
         self.torques_b = torques_b
     
