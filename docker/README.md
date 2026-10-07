@@ -1,0 +1,63 @@
+# FACET with Isaac Sim in Docker
+
+This setup runs the repository's Isaac Lab environment in a container and opens Isaac Sim on the local desktop through XWayland/X11. The live checkout is mounted at `/workspace/active_adaptation`; Hydra outputs, W&B offline runs, and checkpoints are therefore available on the host. Container project discovery and Isaac caches live under `~/.cache/active-adaptation-docker` by default.
+
+The image uses Ubuntu 22.04, Python 3.11.17, Isaac Sim 5.1.0, Isaac Lab 2.3.2.post1, and PyTorch 2.7.0 with CUDA 12.8. It uses the host NVIDIA driver through NVIDIA Container Toolkit.
+
+## Host prerequisites
+
+Install Docker Engine, the Docker Compose plugin, and NVIDIA Container Toolkit for your Linux distribution. Configure Docker for NVIDIA GPUs and restart the daemon:
+
+```bash
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+docker run --rm --gpus all ubuntu nvidia-smi
+```
+
+Follow the current [Docker Engine installation guide](https://docs.docker.com/engine/install/), [Compose plugin installation guide](https://docs.docker.com/compose/install/linux/), and [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for distribution-specific steps.
+
+Accept the Isaac Sim license and terms before using the image. The first build downloads Isaac Sim packages from NVIDIA's package index. After accepting, pass `ACCEPT_EULA=Y` for each launch; the launcher forwards this as Isaac Sim's `OMNI_KIT_ACCEPT_EULA=YES` setting. Telemetry consent remains optional; training defaults to W&B offline mode and does not require W&B credentials.
+
+The local desktop must expose X11 or XWayland through `DISPLAY`, `/tmp/.X11-unix`, and a readable `XAUTHORITY` cookie file. For Wayland desktops, the launcher uses the session's XWayland display. It extracts only the current display cookie into a temporary read-only file; it does not disable display authentication.
+
+## Build and launch
+
+From the repository root:
+
+```bash
+docker/build.sh
+ACCEPT_EULA=Y docker/run.sh train
+```
+
+Training starts `facet/Go2Force` with `ppo_facet_train`, four environments, GUI rendering, 300,000 frames, and offline W&B. Extra Hydra overrides go at the end:
+
+```bash
+ACCEPT_EULA=Y docker/run.sh train task.num_envs=8 total_frames=1000000 seed=7
+```
+
+Play a checkpoint produced inside the checkout:
+
+```bash
+ACCEPT_EULA=Y docker/run.sh play outputs/2026-10-07/12-00-00-Go2Force-ppo_facet/checkpoint_latest.pt
+```
+
+Playback loads the saved teacher policy. Student adaptation and finetuning are separate training workflows. To open an interactive container shell, run `ACCEPT_EULA=Y docker/run.sh shell`.
+
+By default, training outputs are in `outputs/`, playback outputs are in `outputs_play/`, and checkpoints are in the Hydra/W&B run directory under `outputs/`. Since the repository is mounted and the container runs with your UID and GID, those files remain host-owned. The image tag and cache location can be changed with `ACTIVE_ADAPTATION_DOCKER_IMAGE` and `ACTIVE_ADAPTATION_DOCKER_CACHE`.
+
+Only one managed Isaac container may run at once. `Ctrl+C` interrupts the current command. To request a graceful stop from another terminal, run `docker stop --time 30 active-adaptation-isaac`. Closing the Isaac window ends the simulator process; the launcher then closes the managed container. `docker/run.sh` removes its temporary Xauthority cookie when the command exits.
+
+The container keeps separate, persistent project-discovery, shader, Warp, Kit, and user configuration caches in the configured Docker cache directory. Remove that directory only when you want a clean container cache.
+
+## Runtime checks
+
+After building, the image build checks native importer and graphics libraries with the system linker and verifies Python package versions plus PyTorch's CUDA build. With Docker configured, confirm GPU access using:
+
+```bash
+docker run --rm --gpus all active-adaptation:isaaclab-2.3.2 \
+  /opt/venv/bin/python -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
+```
+
+Then launch training and verify the Isaac viewport moves, a checkpoint appears in the mounted output directory, and the output is owned by your host UID. Stop and restart the container, then play that checkpoint to confirm loading and cache persistence. Check `nvidia-smi` after Ctrl+C, closing the GUI, startup failure, or `docker stop` to confirm no managed Isaac process retains GPU memory. The host desktop may continue to use GPU memory.
+
+For a short training check that runs ten PPO updates and the script's final evaluation, use `ACCEPT_EULA=Y docker/run.sh train total_frames=1280`. With four environments and 32 rollout steps, 1,280 frames produce ten updates.

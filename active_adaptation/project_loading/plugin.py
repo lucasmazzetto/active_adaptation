@@ -14,6 +14,10 @@ def collect_environment_cfg_paths(
     for project_info in projects["environment"].values():
         if not project_info["enabled"]:
             continue
+        explicit_config_path = project_info.get("config_path")
+        if explicit_config_path:
+            config_search_paths.append(str(Path(explicit_config_path)))
+            continue
         pkg_path = Path(project_info["path"])
         if pkg_path.parent.name == "src":
             path = pkg_path.parent.parent / "cfg"

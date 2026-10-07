@@ -1,12 +1,12 @@
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
-CACHE_DIR = ROOT_DIR / ".cache"
-PROJECTS_FILE = CACHE_DIR / "projects.json"
-
+CACHE_DIR = Path(os.environ.get("AA_CACHE_DIR", ROOT_DIR / ".cache")).expanduser()
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
+PROJECTS_FILE = CACHE_DIR / "projects.json"
 
 
 def default_projects_manifest() -> dict[str, dict[str, dict[str, Any]]]:

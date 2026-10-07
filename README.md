@@ -24,6 +24,8 @@ Projects using this codebase:
 
 ## Installation
 
+For a containerized Isaac Sim environment with local GUI, see [Docker setup](docker/README.md).
+
 1. For the following steps, the recommended way to structure the (VSCode or Cursor) workspace is:
    ```bash
     ${workspaceFolder}/ # File->Open Folder here

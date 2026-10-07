@@ -8,6 +8,10 @@ import hydra
 import itertools
 import datetime
 import copy
+import logging
+import os
+import sys
+import threading
 from pathlib import Path
 
 from omegaconf import OmegaConf, DictConfig
@@ -41,47 +45,78 @@ def export_policy(env, policy, export_dir):
 
 @hydra.main(config_path=str(CONFIG_PATH), config_name="play", version_base=None)
 def main(cfg: DictConfig):
+    resources = {}
+    exit_code = 0
+    try:
+        _play(cfg, resources)
+    except BaseException as error:
+        exit_code = 130 if isinstance(error, KeyboardInterrupt) else 1
+        logging.exception("Playback failed")
+        raise
+    finally:
+        # Native Kit shutdown can stall while closing the USD stage. Bound
+        # cleanup so playback cannot retain GPU resources indefinitely.
+        def stop_stalled_shutdown():
+            print("Simulation shutdown exceeded 15 seconds; exiting this playback process.", file=sys.stderr, flush=True)
+            sys.stdout.flush()
+            os._exit(exit_code)
+
+        shutdown_timer = threading.Timer(15, stop_stalled_shutdown)
+        shutdown_timer.daemon = True
+        shutdown_timer.start()
+        try:
+            try:
+                env = resources.get("env")
+                if env is not None:
+                    env.close()
+            finally:
+                aa.close_simulation_app()
+        except BaseException:
+            exit_code = 1
+            raise
+        finally:
+            shutdown_timer.cancel()
+
+
+def _play(cfg: DictConfig, resources):
     OmegaConf.resolve(cfg)
     OmegaConf.set_struct(cfg, False)
 
     aa.init(cfg, auto_rank=True)
-    
+
     from active_adaptation.helpers import make_env_policy
     checkpoint = parse_checkpoint(cfg.checkpoint_path)
     env, policy = make_env_policy(cfg, checkpoint)
-    
+    resources["env"] = env
+
     if cfg.export_policy:
         export_dir = FILE_PATH / "exports" / str(cfg.task.name)
         export_policy(env, policy, export_dir)
 
     stats_keys = [
-        k for k in env.reward_spec.keys(True, True) 
-        if isinstance(k, tuple) and k[0]=="stats"
+        k for k in env.reward_spec.keys(True, True)
+        if isinstance(k, tuple) and k[0] == "stats"
     ]
     episode_stats = EpisodeStats(stats_keys, device=env.device)
     rollout_policy = policy.get_rollout_policy("eval")
-    
+
     env.base_env.eval()
     carry = env.reset()
-    
+
     assert not env.base_env.training
 
     timer = Timer(env.step_dt)
 
-    # Optional: refresh from URL/wandb in background so play loop never blocks on updates
     if checkpoint is not None and checkpoint.remote:
         print("Starting background checkpoint refresh")
         checkpoint.start_background_refresh(interval_sec=60)
 
-    # Optional video recording (Isaac backend only). This remains safe under
-    # KeyboardInterrupt because the recorder is a context manager that flushes
-    # buffered frames on exit.
     record_enabled = bool(cfg.get("record_video", False))
     video_dir = FILE_PATH / "videos"
     time_str = datetime.datetime.now().strftime("%m-%d_%H-%M")
     video_path = video_dir / f"{cfg.task.name}-{time_str}.mp4"
 
-    with env.get_recorder(video_path, enabled=record_enabled)as rec, \
+    with env.get_recorder(video_path, enabled=record_enabled) as rec, \
         torch.inference_mode(), set_exploration_type(ExplorationType.MODE):
         try:
             for i in itertools.count():
@@ -100,10 +135,7 @@ def main(cfg: DictConfig):
                 timer.sleep()
         except KeyboardInterrupt:
             print(f"Interrupted by user, video saved to: {video_path}" if record_enabled else "Interrupted by user.")
-    
-    env.close()
 
 
 if __name__ == "__main__":
     main()
-
