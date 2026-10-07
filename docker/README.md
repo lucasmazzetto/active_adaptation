@@ -6,17 +6,25 @@ The image uses Ubuntu 22.04, Python 3.11.17, Isaac Sim 5.1.0, Isaac Lab 2.3.2.po
 
 ## Host prerequisites
 
-Install Docker Engine, the Docker Compose plugin, and NVIDIA Container Toolkit for your Linux distribution. Configure Docker for NVIDIA GPUs and restart the daemon:
+Install Docker Engine and the Docker Compose plugin. On an Ubuntu/Debian host with a working NVIDIA driver, configure GPU access using the setup script:
+
+```bash
+./docker/setup_gpu.sh
+```
+
+It asks for your sudo password, installs NVIDIA Container Toolkit from NVIDIA's stable repository, configures Docker, restarts its daemon, and checks GPU access. Stop running Docker containers first; the script refuses to restart Docker while containers are running. This host setup does not require rebuilding the image or logging out.
+
+If NVIDIA Container Toolkit is already installed, the equivalent configuration commands are:
 
 ```bash
 sudo nvidia-ctk runtime configure --runtime=docker
 sudo systemctl restart docker
-docker run --rm --gpus all ubuntu nvidia-smi
+docker run --rm --runtime=nvidia --gpus all ubuntu:22.04 nvidia-smi
 ```
 
 Follow the current [Docker Engine installation guide](https://docs.docker.com/engine/install/), [Compose plugin installation guide](https://docs.docker.com/compose/install/linux/), and [NVIDIA Container Toolkit installation guide](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for distribution-specific steps.
 
-Accept the Isaac Sim license and terms before using the image. The first build downloads Isaac Sim packages from NVIDIA's package index. After accepting, pass `ACCEPT_EULA=Y` for each launch; the launcher forwards this as Isaac Sim's `OMNI_KIT_ACCEPT_EULA=YES` setting. Telemetry consent remains optional; training defaults to W&B offline mode and does not require W&B credentials.
+Accept the Isaac Sim license and terms before using the image. The first build downloads Isaac Sim packages from NVIDIA's package index. The launcher asks for acceptance on the first launch, or you can pass `ACCEPT_EULA=Y`. It saves your choice in `EULA_ACCEPTED` under the Docker cache directory and forwards `OMNI_KIT_ACCEPT_EULA=YES` on subsequent launches. This avoids Isaac's built-in prompt writing into its root-owned Python installation. Telemetry consent remains optional; training defaults to W&B offline mode and does not require W&B credentials.
 
 The local desktop must expose X11 or XWayland through `DISPLAY`, `/tmp/.X11-unix`, and a readable `XAUTHORITY` cookie file. For Wayland desktops, the launcher uses the session's XWayland display. It extracts only the current display cookie into a temporary read-only file; it does not disable display authentication.
 
@@ -49,12 +57,14 @@ Only one managed Isaac container may run at once. `Ctrl+C` interrupts the curren
 
 The container keeps separate, persistent project-discovery, shader, Warp, Kit, and user configuration caches in the configured Docker cache directory. Remove that directory only when you want a clean container cache.
 
+Training and playback pass Kit's `--portable-root` option pointing to the writable Kit cache mount. Kit logs, downloaded extensions, and user settings therefore stay outside the root-owned Python installation.
+
 ## Runtime checks
 
 After building, the image build checks native importer and graphics libraries with the system linker and verifies Python package versions plus PyTorch's CUDA build. With Docker configured, confirm GPU access using:
 
 ```bash
-docker run --rm --gpus all active-adaptation:isaaclab-2.3.2 \
+docker run --rm --runtime=nvidia --gpus all active-adaptation:isaaclab-2.3.2 \
   /opt/venv/bin/python -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
 ```
 

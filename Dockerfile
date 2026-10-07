@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1.7
 FROM ubuntu:22.04
 
 ARG DEBIAN_FRONTEND=noninteractive
@@ -8,6 +9,8 @@ ARG PYTHON_SHA256=bfb74ad39efae27cda510f134ab408e00f9992c56851cfc0b1cdb5646da115
 ENV UV_INSTALL_DIR=/usr/local/bin \
     UV_CACHE_DIR=/opt/uv-cache \
     UV_LINK_MODE=copy \
+    UV_HTTP_TIMEOUT=600 \
+    UV_HTTP_RETRIES=10 \
     UV_COMPILE_BYTECODE=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -48,7 +51,8 @@ RUN set -eux; \
 WORKDIR /workspace/active_adaptation
 COPY . /workspace/active_adaptation
 
-RUN set -eux; \
+RUN --mount=type=cache,target=/opt/uv-cache,sharing=locked \
+    set -eux; \
     ldconfig -p | grep -q 'libxml2.so.2'; \
     ldconfig -p | grep -q 'libGLU.so.1'; \
     ldconfig -p | grep -q 'libvulkan.so.1'; \
