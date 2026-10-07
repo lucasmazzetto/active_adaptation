@@ -37,6 +37,8 @@ docker/build.sh
 ACCEPT_EULA=Y docker/run.sh train
 ```
 
+The build script passes your UID and GID into the image and creates a matching named account. This lets OptiX resolve the runtime username for its disk cache while outputs remain owned by your host user. Rebuild the image when using it with a different host UID. Direct `docker build` invocations should pass `--build-arg HOST_UID="$(id -u)" --build-arg HOST_GID="$(id -g)"`.
+
 Training starts `facet/Go2Force` with `ppo_facet_train`, four environments, GUI rendering, 300,000 frames, and offline W&B. Extra Hydra overrides go at the end:
 
 ```bash
@@ -61,7 +63,15 @@ Training and playback pass Kit's `--portable-root` option pointing to the writab
 
 ## Runtime checks
 
-After building, the image build checks native importer and graphics libraries with the system linker and verifies Python package versions plus PyTorch's CUDA build. With Docker configured, confirm GPU access using:
+After building, the image build checks native importer and graphics libraries with the system linker and verifies Python package versions plus PyTorch's CUDA build. Verify username lookup with:
+
+```bash
+docker run --rm --user "$(id -u):$(id -g)" \
+  --entrypoint /opt/venv/bin/python active-adaptation:isaaclab-2.3.2 \
+  -c 'import os, pwd; print(pwd.getpwuid(os.getuid()).pw_name)'
+```
+
+With Docker configured, confirm GPU access using:
 
 ```bash
 docker run --rm --runtime=nvidia --gpus all active-adaptation:isaaclab-2.3.2 \

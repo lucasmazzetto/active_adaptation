@@ -68,6 +68,20 @@ RUN --mount=type=cache,target=/opt/uv-cache,sharing=locked \
 COPY docker/entrypoint.sh /usr/local/bin/active-adaptation-entrypoint
 RUN chmod 0755 /usr/local/bin/active-adaptation-entrypoint
 
+# Numeric --user IDs also need a passwd entry for OptiX's username lookup.
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+RUN set -eux; \
+    if ! getent group "$HOST_GID" >/dev/null; then \
+        groupadd --gid "$HOST_GID" isaac; \
+    fi; \
+    if ! getent passwd "$HOST_UID" >/dev/null; then \
+        useradd --uid "$HOST_UID" --gid "$HOST_GID" \
+            --no-create-home --no-log-init \
+            --home-dir /var/cache/active-adaptation/home --shell /bin/bash isaac; \
+    fi; \
+    getent passwd "$HOST_UID"
+
 ENV AA_CACHE_DIR=/var/cache/active-adaptation/aa \
     XDG_CACHE_HOME=/var/cache/active-adaptation/xdg \
     WARP_CACHE_PATH=/var/cache/active-adaptation/warp \

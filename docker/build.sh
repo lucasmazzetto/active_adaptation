@@ -9,4 +9,7 @@ if ! command -v docker >/dev/null 2>&1; then
     exit 127
 fi
 
-exec docker build --tag "$IMAGE" --file "$ROOT_DIR/Dockerfile" "$@" "$ROOT_DIR"
+exec docker build --tag "$IMAGE" --file "$ROOT_DIR/Dockerfile" \
+    --build-arg "HOST_UID=$(id -u)" \
+    --build-arg "HOST_GID=$(id -g)" \
+    "$@" "$ROOT_DIR"
